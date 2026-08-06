@@ -1,12 +1,11 @@
-"""Vorwärts-/inverse Kinematik für den deckenmontierten UR10e.
+"""Vorwärts-/inverse Kinematik für den deckenmontierten Fairino FR20.
 
 Baut die Kinematikkette nicht aus manuell abgetippten DH-Parametern auf,
-sondern liest sie direkt aus dem von ur10e_ceiling_gazebo.py erzeugten
+sondern liest sie direkt aus dem von fr20_ceiling_gazebo.py erzeugten
 URDF (world -> ... -> tool0). So stimmt die Kette garantiert mit dem
 Modell überein, das tatsächlich in Gazebo simuliert wird - inklusive der
-Deckenmontage-Transformation und aller fixen Zwischen-Joints
-(base_link_inertia, flange, ...), die ein von Hand erstelltes DH-Modell
-leicht übersieht.
+Deckenmontage-Transformation und des künstlich angehängten tool0-Frames,
+die ein von Hand erstelltes DH-Modell leicht übersieht.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-import ur10e_ceiling_gazebo as sim
+import fr20_ceiling_gazebo as sim
 
 
 def _rpy_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:

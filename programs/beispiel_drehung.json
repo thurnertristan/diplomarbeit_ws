@@ -1,0 +1,33 @@
+{
+  "name": "Drehungsbeispiel",
+  "points": [
+    {
+      "name": "Start",
+      "x": 0.0,
+      "y": 0.6,
+      "z": 1.05,
+      "dwell_s": 1.0
+    },
+    {
+      "name": "Drehung 1",
+      "x": -0.6,
+      "y": 0.0,
+      "z": 1.05,
+      "dwell_s": 1.0
+    },
+    {
+      "name": "Drehung 2",
+      "x": 0.6,
+      "y": 0.0,
+      "z": 1.05,
+      "dwell_s": 1.0
+    },
+    {
+      "name": "Drehung 3 (zurück zum Start)",
+      "x": 0.0,
+      "y": 0.6,
+      "z": 1.05,
+      "dwell_s": 1.0
+    }
+  ]
+}

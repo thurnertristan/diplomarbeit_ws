@@ -1,0 +1,556 @@
+<?xml version="1.0"?>
+<sdf version="1.9">
+  <world name="ceiling_fr20_world">
+    <physics name="1ms" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"></plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"></plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"></plugin>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 3.0 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <direction>-0.4 0.2 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision"><geometry><plane><normal>0 0 1</normal></plane></geometry></collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>4.0 4.0</size></plane></geometry>
+          <material><ambient>0.6 0.6 0.6 1</ambient><diffuse>0.6 0.6 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="ceiling">
+      <static>true</static>
+      <pose>0 0 2.025 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>4.0 4.0 0.05</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>4.0 4.0 0.05</size></box></geometry>
+          <material>
+            <ambient>0.9 0.9 0.9 0.15</ambient>
+            <diffuse>0.9 0.9 0.9 0.15</diffuse>
+          </material>
+          <transparency>0.85</transparency>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 2.0 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>4.0 0.05 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>4.0 0.05 2.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.82 0.15</ambient>
+            <diffuse>0.85 0.85 0.82 0.15</diffuse>
+          </material>
+          <transparency>0.85</transparency>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -2.0 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>4.0 0.05 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>4.0 0.05 2.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.82 0.15</ambient>
+            <diffuse>0.85 0.85 0.82 0.15</diffuse>
+          </material>
+          <transparency>0.85</transparency>
+        </visual>
+      </link>
+    </model>
+    <model name="wall_east">
+      <static>true</static>
+      <pose>2.0 0 1.0 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.05 4.0 2.0</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.05 4.0 2.0</size></box></geometry>
+          <material>
+            <ambient>0.85 0.85 0.82 0.15</ambient>
+            <diffuse>0.85 0.85 0.82 0.15</diffuse>
+          </material>
+          <transparency>0.85</transparency>
+        </visual>
+      </link>
+    </model>
+
+    <model name="table">
+      <static>true</static>
+      <pose>0.0 0.0 0.375 0 0 0</pose>
+      <link name="link">
+        <collision name="collision"><geometry><box><size>0.7999999999999999 2.105 0.75</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.7999999999999999 2.105 0.75</size></box></geometry>
+          <material><ambient>0.55 0.35 0.2 1</ambient><diffuse>0.55 0.35 0.2 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="assembly">
+      <static>true</static>
+      <pose>0.0252107 0.0048693 0.771 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><mesh><uri>file:///home/tristan/diplomarbeit/diplomarbeit_ws/meshes/baugruppe1/Baugruppe1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><mesh><uri>file:///home/tristan/diplomarbeit/diplomarbeit_ws/meshes/baugruppe1/Baugruppe1.stl</uri><scale>0.001 0.001 0.001</scale></mesh></geometry>
+          <material><ambient>0.7 0.7 0.72 1</ambient><diffuse>0.7 0.7 0.72 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+<model name='fr20'>
+    <joint name='world_to_base' type='fixed'>
+      <pose relative_to='__model__'>0 0 2 3.14159265358979 0 0</pose>
+      <parent>world</parent>
+      <child>base_link</child>
+    </joint>
+    <link name='base_link'>
+      <pose relative_to='world_to_base'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-2.1681000000000001e-05 -6.0647999999999999e-05 0.043457000000000003 0 0 0</pose>
+        <mass>9.2501999999999995</mass>
+        <inertia>
+          <ixx>0.034499000000000002</ixx>
+          <ixy>1.6640999999999999e-05</ixy>
+          <ixz>-7.4780000000000002e-06</ixz>
+          <iyy>0.034518</iyy>
+          <iyz>-2.0849e-05</iyz>
+          <izz>0.054960000000000002</izz>
+        </inertia>
+      </inertial>
+      <collision name='base_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/base_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='base_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/base_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j1' type='revolute'>
+      <pose relative_to='base_link'>0 0 0 0 0 0</pose>
+      <parent>base_link</parent>
+      <child>shoulder_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-3.0543</lower>
+          <upper>3.0543</upper>
+          <effort>150</effort>
+          <velocity>3.1499999999999999</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='shoulder_link'>
+      <pose relative_to='j1'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-0.00019000000000000001 -0.036569999999999998 0.0056800000000000002 0 0 0</pose>
+        <mass>20.789999999999999</mass>
+        <inertia>
+          <ixx>0.11681303</ixx>
+          <ixy>1.0684e-05</ixy>
+          <ixz>0.00015197999999999999</ixz>
+          <iyy>0.09147711</iyy>
+          <iyz>0.0045898500000000004</iyz>
+          <izz>0.11321597999999999</izz>
+        </inertia>
+      </inertial>
+      <collision name='shoulder_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/shoulder_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='shoulder_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/shoulder_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j2' type='revolute'>
+      <pose relative_to='shoulder_link'>0 0 0.215 1.5708 0 0</pose>
+      <parent>shoulder_link</parent>
+      <child>upperarm_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-4.6250999999999998</lower>
+          <upper>1.4835</upper>
+          <effort>150</effort>
+          <velocity>3.1499999999999999</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='upperarm_link'>
+      <pose relative_to='j2'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.60524999999999995 6.0000000000000002e-05 0.20294000000000001 0 0 0</pose>
+        <mass>42.840000000000003</mass>
+        <inertia>
+          <ixx>0.21509702</ixx>
+          <ixy>0.0019321799999999999</ixy>
+          <ixz>0.11070934</ixz>
+          <iyy>8.3419240600000002</iyy>
+          <iyz>5.3170000000000001e-05</iyz>
+          <izz>8.2961169100000003</izz>
+        </inertia>
+      </inertial>
+      <collision name='upperarm_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/upperarm_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='upperarm_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/upperarm_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j3' type='revolute'>
+      <pose relative_to='upperarm_link'>-1 0 0 0 0 0</pose>
+      <parent>upperarm_link</parent>
+      <child>forearm_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-2.8273999999999999</lower>
+          <upper>2.8273999999999999</upper>
+          <effort>150</effort>
+          <velocity>3.1499999999999999</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='forearm_link'>
+      <pose relative_to='j3'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.26284000000000002 0.00022000000000000001 0.04308 0 0 0</pose>
+        <mass>9.8800000000000008</mass>
+        <inertia>
+          <ixx>0.030367720000000001</ixx>
+          <ixy>0.00023856999999999999</ixy>
+          <ixz>0.0062739800000000002</ixz>
+          <iyy>0.86016899000000002</iyy>
+          <iyz>7.7700000000000001e-06</iyz>
+          <izz>0.85782696999999997</izz>
+        </inertia>
+      </inertial>
+      <collision name='forearm_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/forearm_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='forearm_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/forearm_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j4' type='revolute'>
+      <pose relative_to='forearm_link'>-0.71599999999999997 0 0 0 0 0</pose>
+      <parent>forearm_link</parent>
+      <child>wrist1_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-4.6250999999999998</lower>
+          <upper>1.4835</upper>
+          <effort>28</effort>
+          <velocity>3.2000000000000002</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='wrist1_link'>
+      <pose relative_to='j4'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>0.00023000000000000001 -0.0022799999999999999 0.018419999999999999 0 0 0</pose>
+        <mass>4.6399999999999997</mass>
+        <inertia>
+          <ixx>0.0093377200000000007</ixx>
+          <ixy>3.3250000000000002e-05</ixy>
+          <ixz>5.007e-05</ixz>
+          <iyy>0.0092689699999999996</iyy>
+          <iyz>0.00021949</iyz>
+          <izz>0.0077454500000000001</izz>
+        </inertia>
+      </inertial>
+      <collision name='wrist1_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist1_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='wrist1_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist1_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j5' type='revolute'>
+      <pose relative_to='wrist1_link'>0 0 0.16600999999999999 1.5708 0 0</pose>
+      <parent>wrist1_link</parent>
+      <child>wrist2_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-3.0543</lower>
+          <upper>3.0543</upper>
+          <effort>28</effort>
+          <velocity>3.2000000000000002</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='wrist2_link'>
+      <pose relative_to='j5'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-0.00023000000000000001 0.0022799999999999999 0.018419999999999999 0 0 0</pose>
+        <mass>4.6399999999999997</mass>
+        <inertia>
+          <ixx>0.0093377200000000007</ixx>
+          <ixy>3.3250000000000002e-05</ixy>
+          <ixz>-5.007e-05</ixz>
+          <iyy>0.0092689699999999996</iyy>
+          <iyz>-0.00021949</iyz>
+          <izz>0.0077454500000000001</izz>
+        </inertia>
+      </inertial>
+      <collision name='wrist2_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist2_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='wrist2_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist2_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <ambient>1 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <joint name='j6' type='revolute'>
+      <pose relative_to='wrist2_link'>0 0 0.13800000000000001 -1.5708 0 0</pose>
+      <parent>wrist2_link</parent>
+      <child>wrist3_link</child>
+      <axis>
+        <xyz>0 0 1</xyz>
+        <limit>
+          <lower>-3.0543</lower>
+          <upper>3.0543</upper>
+          <effort>28</effort>
+          <velocity>3.2000000000000002</velocity>
+        </limit>
+        <dynamics>
+          <damping>0</damping>
+          <friction>0</friction>
+          <spring_reference>0</spring_reference>
+          <spring_stiffness>0</spring_stiffness>
+        </dynamics>
+      </axis>
+    </joint>
+    <link name='wrist3_link'>
+      <pose relative_to='j6'>0 0 0 0 0 0</pose>
+      <inertial>
+        <pose>-0.0021099999999999999 -0.0019599999999999999 -0.020379999999999999 0 0 0</pose>
+        <mass>0.59999999999999998</mass>
+        <inertia>
+          <ixx>0.00071708999999999998</ixx>
+          <ixy>1.75e-06</ixy>
+          <ixz>5.5500000000000002e-06</ixz>
+          <iyy>0.00071407999999999997</iyy>
+          <iyz>5.31e-06</iyz>
+          <izz>0.0012755799999999999</izz>
+        </inertia>
+      </inertial>
+      <collision name='wrist3_link_collision'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist3_link.STL</uri>
+          </mesh>
+        </geometry>
+      </collision>
+      <visual name='wrist3_link_visual'>
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <scale>1 1 1</scale>
+            <uri>model://fairino_description/meshes/fairino20_v6/wrist3_link.STL</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <diffuse>0.990199983 1 1 1</diffuse>
+          <ambient>0.990199983 1 1 1</ambient>
+        </material>
+      </visual>
+    </link>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j1</joint_name>
+      <topic>/fr20/j1/cmd_pos</topic>
+      <p_gain>6000</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>300</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j2</joint_name>
+      <topic>/fr20/j2/cmd_pos</topic>
+      <p_gain>12000</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>600</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j3</joint_name>
+      <topic>/fr20/j3/cmd_pos</topic>
+      <p_gain>6000</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>300</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j4</joint_name>
+      <topic>/fr20/j4/cmd_pos</topic>
+      <p_gain>1000</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>40</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j5</joint_name>
+      <topic>/fr20/j5/cmd_pos</topic>
+      <p_gain>1000</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>40</d_gain>
+    </plugin>
+    <plugin name='gz::sim::systems::JointPositionController' filename='gz-sim-joint-position-controller-system'>
+      <joint_name>j6</joint_name>
+      <topic>/fr20/j6/cmd_pos</topic>
+      <p_gain>400</p_gain>
+      <i_gain>0</i_gain>
+      <d_gain>20</d_gain>
+    </plugin>
+    <frame name='wrist3_link-tool0_fixed_joint' attached_to='wrist3_link'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+    <frame name='tool0' attached_to='wrist3_link-tool0_fixed_joint'>
+      <pose>0 0 0 0 0 0</pose>
+    </frame>
+  </model>
+  </world>
+</sdf>

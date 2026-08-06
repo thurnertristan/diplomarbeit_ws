@@ -1,0 +1,15 @@
+{
+  "name": "Home <-> Blick auf Tisch (Gelenkposen statt Koordinaten)",
+  "points": [
+    {
+      "name": "Home (sicher, nicht die Null-Stellung - vermeidet Kollision mit dem Tisch)",
+      "joints": {"j1": 50.08, "j2": 0.0, "j3": -126.57, "j4": -85.94, "j5": -90.0, "j6": -140.09},
+      "dwell_s": 2.0
+    },
+    {
+      "name": "Blick auf Tisch",
+      "joints": {"j1": 50.09, "j2": -54.52, "j3": -131.84, "j4": -83.64, "j5": -90.0, "j6": -140.09},
+      "dwell_s": 2.0
+    }
+  ]
+}

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Einfache GUI zur Steuerung des UR10e in der Deckenmontage-Simulation.
+"""Einfache GUI zur Steuerung des Fairino FR20 in der Deckenmontage-Simulation.
 
-Startet dieselbe Gazebo-Welt wie ur10e_ceiling_gazebo.py (Raum, Tisch,
-kopfüber montierter UR10e) und öffnet zusätzlich ein Tkinter-Fenster mit
+Startet dieselbe Gazebo-Welt wie fr20_ceiling_gazebo.py (Raum, Tisch,
+kopfüber montierter FR20) und öffnet zusätzlich ein Tkinter-Fenster mit
 einem Schieberegler pro Gelenk. Jeder Regler sendet live per gz-transport
 auf das vom Simulationsskript angelegte JointPositionController-Topic
-(/ur10e/<gelenk>/cmd_pos).
+(/fr20/<gelenk>/cmd_pos).
 
-Voraussetzungen: siehe Docstring von ur10e_ceiling_gazebo.py (ROS 2
-gesourced, Gazebo- und ur_description-Pakete installiert).
+Voraussetzungen: siehe Docstring von fr20_ceiling_gazebo.py (ROS 2
+gesourced, Gazebo-Pakete installiert; fairino_description liegt vendored
+im Workspace).
 
 Start:
     source /opt/ros/jazzy/setup.bash
@@ -25,11 +26,11 @@ from tkinter import ttk
 
 import numpy as np
 
-import ur10e_ceiling_gazebo as sim
-import ur10e_kinematics as kin
+import fr20_ceiling_gazebo as sim
+import fr20_kinematics as kin
 
 # Schieberegler-Bereich je Gelenk. Bewusst auf ±180° begrenzt (statt der
-# realen UR10e-Gelenkgrenzen von teils ±360°), damit sich der an der Decke
+# realen FR20-Gelenkgrenzen von teils über ±180° hinaus), damit sich der an der Decke
 # hängende Arm über die GUI nicht in sich selbst oder in die Wände verdrehen
 # kann - für eine "einfache" Steuerung ist das ausreichend Bewegungsspielraum.
 JOINT_LIMIT_DEG = 180
@@ -38,7 +39,7 @@ JOINT_LIMIT_DEG = 180
 class RobotGui(tk.Tk):
     def __init__(self, publishers: dict, gz_proc: subprocess.Popen) -> None:
         super().__init__()
-        self.title("UR10e Steuerung")
+        self.title("FR20 Steuerung")
         self.publishers = publishers
         self.gz_proc = gz_proc
         self.sliders: dict[str, tk.Scale] = {}
@@ -113,11 +114,21 @@ class RobotGui(tk.Tk):
             self.sliders[joint].set(round(math.degrees(angle)))
             self.publish(joint, angle)
 
+    def go_safely(self, target_pose: dict) -> None:
+        """Fährt zunächst die kollisionsfreie Zwischenpose an, bevor das
+        eigentliche Ziel gesendet wird (siehe SAFE_STAGING_POSE in
+        fr20_ceiling_gazebo.py) - ein direkter Sprung würde je nach
+        Startkonfiguration mitten durch den Tisch schwingen."""
+        self.send_pose(sim.SAFE_STAGING_POSE)
+        self.update()
+        time.sleep(1.0)
+        self.send_pose(target_pose)
+
     def go_look_at_table(self) -> None:
-        self.send_pose(sim.LOOK_AT_TABLE_POSE)
+        self.go_safely(sim.LOOK_AT_TABLE_POSE)
 
     def go_home(self) -> None:
-        self.send_pose({j: 0.0 for j in sim.JOINT_NAMES})
+        self.go_safely({j: 0.0 for j in sim.JOINT_NAMES})
 
     def go_to_position(self) -> None:
         try:
@@ -150,19 +161,17 @@ class RobotGui(tk.Tk):
 
 
 def main() -> None:
-    for tool in ("xacro", "gz", "ros2"):
+    for tool in ("gz", "ros2"):
         sim.check_tool(tool)
 
     sim.isolate_gz_partition()
 
     sim.WORK_DIR.mkdir(exist_ok=True)
-    xacro_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf.xacro"
     urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
     world_path = sim.WORK_DIR / "world.sdf"
 
-    print("Erzeuge Xacro/URDF für den kopfüber montierten UR10e ...")
-    sim.write_mount_xacro(xacro_path)
-    sim.xacro_to_urdf(xacro_path, urdf_path)
+    print("Erzeuge URDF für den kopfüber montierten FR20 ...")
+    sim.write_mount_urdf(urdf_path)
     sim.append_joint_position_controllers(urdf_path)
 
     print("Konvertiere URDF zu SDF, damit der Roboter von Anfang an Teil der Welt ist ...")
@@ -173,7 +182,7 @@ def main() -> None:
 
     print("Starte Gazebo Jetty (gz-sim) ...")
     gz_proc = subprocess.Popen(
-        ["gz", "sim", "-r", str(world_path)], env=sim.gazebo_env_with_ur_meshes()
+        ["gz", "sim", "-r", str(world_path)], env=sim.gazebo_env_with_fr20_meshes()
     )
 
     try:
@@ -188,6 +197,9 @@ def main() -> None:
         publishers = {
             j: node.advertise(f"/{sim.MODEL_NAME}/{j}/cmd_pos", Double) for j in sim.JOINT_NAMES
         }
+
+        print("Fahre zunächst in die sichere Zwischenpose (Kollisionsvermeidung) ...")
+        sim.send_to_safe_staging_pose(publishers)
 
         print("Öffne Steuerungs-GUI ...")
         app = RobotGui(publishers, gz_proc)

@@ -1,0 +1,30 @@
+{
+  "name": "Tisch abfahren",
+  "points": [
+    {
+      "name": "Über Tischmitte",
+      "x": 0.3, "y": -0.1, "z": 1.05,
+      "dwell_s": 1.5
+    },
+    {
+      "name": "Vorne rechts",
+      "x": 0.3, "y": -0.2, "z": 1.05,
+      "dwell_s": 1.5
+    },
+    {
+      "name": "Hinten rechts",
+      "x": 0.3, "y": 0.2, "z": 1.05,
+      "dwell_s": 1.5
+    },
+    {
+      "name": "Hinten links",
+      "x": -0.3, "y": 0.2, "z": 1.05,
+      "dwell_s": 1.5
+    },
+    {
+      "name": "Vorne links",
+      "x": -0.3, "y": -0.2, "z": 1.05,
+      "dwell_s": 1.5
+    }
+  ]
+}
