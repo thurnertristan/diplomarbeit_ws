@@ -109,8 +109,8 @@ class MyApp:
             sim.wait_for_world(sim.WORLD_NAME)
             time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
 
-            from gz.transport import Node
-            from gz.msgs.double_pb2 import Double
+            Node = sim.import_gz("transport").Node
+            Double = sim.import_gz("msgs", "double_pb2").Double
 
             node = Node()
             self._publishers = {

@@ -14,9 +14,15 @@ Teil der Welt-SDF geladen (nicht nachträglich reingespawnt) und dann per
 gz-transport in eine Pose gefahren, in der das Werkzeug (tool0) von oben
 auf die Tischmitte herabschaut.
 
-Voraussetzungen (ROS 2, hier getestet mit Jazzy + Gazebo Jetty / gz-sim10):
+Voraussetzungen (ROS 2, getestet mit Jazzy + Gazebo Jetty/gz-sim10 UND
+Gazebo Harmonic/gz-sim8):
     sudo apt install ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge
-    sudo apt install python3-gz-transport15 python3-gz-msgs12   # meist schon dabei
+    sudo apt install python3-gz-transport<N> python3-gz-msgs<N>   # <N> je nach
+        installierter Gazebo-Version, z.B. transport15/msgs12 bei Jetty oder
+        transport13/msgs10 bei Harmonic - siehe `dpkg -l | grep gz-transport`.
+    Das Python-Modul selbst kann je nach Version unversioniert (gz.transport)
+    oder versioniert (z.B. gz.transport13) heißen - siehe import_gz() unten,
+    das beide Fälle automatisch abdeckt.
 
 Vor dem Start ROS 2 sourcen:
     source /opt/ros/jazzy/setup.bash
@@ -29,6 +35,7 @@ Optionen:
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import shutil
 import subprocess
@@ -36,6 +43,39 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# Verschiedene Gazebo-Versionen benennen ihre Python-Bindings unterschiedlich:
+# manche unversioniert (z.B. "gz.transport" bei Gazebo Jetty/gz-sim10 in
+# unseren Tests), andere versioniert (z.B. "gz.transport13" bei Gazebo
+# Harmonic/gz-sim8, damit mehrere Major-Versionen nebeneinander installierbar
+# sind - "gz.transport" existiert dort schlicht nicht). Ein fest verdrahtetes
+# "from gz.transport import Node" funktioniert deshalb nicht auf jedem
+# Rechner. import_gz() probiert beide Varianten durch.
+_GZ_VERSION_SUFFIXES = ("", "10", "11", "12", "13", "14", "15", "16", "17", "18")
+
+
+def import_gz(base: str, submodule: str = ""):
+    """Importiert ein gz-Python-(Unter-)Modul unabhängig davon, ob die
+    installierte Gazebo-Version es unversioniert (z.B. "gz.transport") oder
+    versioniert (z.B. "gz.transport13") bereitstellt.
+
+    `base` ist z.B. "transport" oder "msgs", `submodule` optional z.B.
+    "double_pb2" (für "gz.msgs<N>.double_pb2"). Wirft ModuleNotFoundError
+    mit einer Liste aller versuchten Namen, falls keiner passt.
+    """
+    tried = []
+    for suffix in _GZ_VERSION_SUFFIXES:
+        name = f"gz.{base}{suffix}" + (f".{submodule}" if submodule else "")
+        tried.append(name)
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError:
+            continue
+    raise ModuleNotFoundError(
+        f"Kein gz-Python-Modul für '{base}' gefunden. Versucht: {', '.join(tried)}. "
+        f"Ist das passende Paket installiert (z.B. python3-gz-{base}<N>, "
+        f"<N> = installierte Gazebo-Version, siehe 'dpkg -l | grep gz-{base}')?"
+    )
 
 # ---------------------------------------------------------------------------
 # Konfiguration
@@ -453,10 +493,10 @@ def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:
     (wie sie robot_gui.py/robot_program.py aufbauen) werden die
     übergebenen Publisher wiederverwendet.
     """
-    from gz.msgs.double_pb2 import Double
+    Double = import_gz("msgs", "double_pb2").Double
 
     if publishers is None:
-        from gz.transport import Node
+        Node = import_gz("transport").Node
 
         node = Node()
         publishers = {j: node.advertise(f"/{MODEL_NAME}/{j}/cmd_pos", Double) for j in JOINT_NAMES}

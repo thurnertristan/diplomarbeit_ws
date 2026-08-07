@@ -103,7 +103,7 @@ class RobotGui(tk.Tk):
         self.publish(joint, math.radians(float(degrees_str)))
 
     def publish(self, joint: str, radians: float) -> None:
-        from gz.msgs.double_pb2 import Double
+        Double = sim.import_gz("msgs", "double_pb2").Double
 
         msg = Double()
         msg.data = radians
@@ -190,8 +190,8 @@ def main() -> None:
         print("Warte, bis die Gelenk-Controller aktiv sind ...")
         time.sleep(2.0)
 
-        from gz.transport import Node
-        from gz.msgs.double_pb2 import Double
+        Node = sim.import_gz("transport").Node
+        Double = sim.import_gz("msgs", "double_pb2").Double
 
         node = Node()
         publishers = {

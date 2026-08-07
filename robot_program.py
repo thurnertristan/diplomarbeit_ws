@@ -326,7 +326,7 @@ def run_program(
     gui/my_gui.py: ein Button-Klick während ein anderes Programm läuft
     bricht es ab und fährt stattdessen sofort die neue Route).
     """
-    from gz.msgs.double_pb2 import Double
+    Double = sim.import_gz("msgs", "double_pb2").Double
 
     # SAFE_STAGING_POSE als Annahme für die aktuelle Pose: gz-sim spawnt den
     # Roboter physikalisch immer in der Null-Stellung, und jeder Aufrufer
@@ -466,8 +466,8 @@ def main() -> None:
         print("Warte, bis die Gelenk-Controller aktiv sind ...")
         time.sleep(2.0)
 
-        from gz.transport import Node
-        from gz.msgs.double_pb2 import Double
+        Node = sim.import_gz("transport").Node
+        Double = sim.import_gz("msgs", "double_pb2").Double
 
         node = Node()
         publishers = {j: node.advertise(f"/{sim.MODEL_NAME}/{j}/cmd_pos", Double) for j in sim.JOINT_NAMES}
