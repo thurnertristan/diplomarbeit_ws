@@ -422,8 +422,19 @@ def build_world_sdf(robot_model_sdf: str) -> str:
 """
 
 
-def wait_for_world(world_name: str, timeout: float = 30.0) -> None:
-    """Wartet, bis gz-sim die Welt (inkl. des darin enthaltenen Roboters) geladen hat."""
+def wait_for_world(world_name: str, timeout: float = 60.0) -> None:
+    """Wartet, bis gz-sim die Welt (inkl. des darin enthaltenen Roboters) geladen hat.
+
+    Wirft TimeoutError statt sys.exit() zu rufen: sys.exit() erzeugt ein
+    SystemExit, das von "except Exception" (z.B. in gui/my_gui.py's
+    Hintergrund-Threads) NICHT gefangen wird - ein Timeout hier würde dann
+    zwar den Auto-Start-Thread lautlos beenden, aber self._gz_proc bliebe
+    fälschlich als "läuft" stehen, ohne dass Publisher aufgebaut wurden
+    (führte zu "'NoneType' object is not subscriptable" bei einem späteren
+    Programmstart). Default-Timeout bewusst höher als früher (60 statt 30s),
+    da langsamere Rechner beim ersten Laden von Meshes/Welt länger brauchen
+    können.
+    """
     deadline = time.time() + timeout
     service = f"/world/{world_name}/control"
     while time.time() < deadline:
@@ -431,7 +442,7 @@ def wait_for_world(world_name: str, timeout: float = 30.0) -> None:
         if service in listed.stdout.splitlines():
             return
         time.sleep(0.5)
-    sys.exit(f"Zeitüberschreitung: gz-sim World '{world_name}' ist nicht gestartet.")
+    raise TimeoutError(f"Zeitüberschreitung: gz-sim World '{world_name}' ist nicht gestartet.")
 
 
 def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:

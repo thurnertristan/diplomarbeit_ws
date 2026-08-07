@@ -51,8 +51,8 @@
         </child>
         <child>
           <object class="ttk.Button" id="button2">
-            <property name="command" type="command" cbtype="simple">on_btpressed</property>
-            <property name="image">dryexpert.png</property>
+            <property name="command" type="command" cbtype="simple">on_button2pressed</property>
+            <property name="image">Form1r.png</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">20</property>
@@ -247,6 +247,29 @@
             <layout manager="grid">
               <property name="column">1</property>
               <property name="row">6</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window3" named="True">
+    <property name="height">200</property>
+    <property name="width">200</property>
+    <child>
+      <object class="ttk.Frame" id="frame_window3" named="True">
+        <property name="height">200</property>
+        <property name="width">200</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label3">
+            <property name="text" translatable="yes">Programm läuft...</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="row">0</property>
             </layout>
           </object>
         </child>

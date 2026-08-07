@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 
 import pygubu
 from PIL import Image, ImageTk
@@ -20,6 +21,7 @@ import robot_program as rp  # noqa: E402
 
 PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_drehung.json"
 PROGRAM_TISCH = REPO_ROOT / "programs" / "beispiel_tisch.json"
+PROGRAM_FIGUR1 = REPO_ROOT / "programs" / "beispiel_figur1.json"
 
 
 class MyApp:
@@ -65,8 +67,27 @@ class MyApp:
         beim Öffnen + direkter Button-Klick) abgesichert.
         """
         with self._sim_lock:
-            if self._gz_proc is not None and self._gz_proc.poll() is None:
+            if self._gz_proc is not None and self._gz_proc.poll() is None and self._publishers is not None:
                 return self._publishers
+
+            if self._gz_proc is not None and self._gz_proc.poll() is None:
+                # gz-sim läuft noch, aber self._publishers wurde nie gesetzt -
+                # ein vorheriger Versuch (z.B. der Auto-Start beim Öffnen der
+                # GUI) ist zwischen Prozessstart und Publisher-Aufbau
+                # gescheitert (z.B. Timeout in sim.wait_for_world auf einem
+                # langsameren Rechner). Ohne diesen Check würde hier "None"
+                # als Publisher zurückgegeben und ein Programm später mit
+                # "'NoneType' object is not subscriptable" abstürzen. Statt
+                # mit dem kaputten Rest weiterzumachen: alten Prozess sauber
+                # beenden und neu aufsetzen.
+                print("Vorheriger Gazebo-Start war unvollständig, versuche es erneut ...")
+                self._gz_proc.terminate()
+                try:
+                    self._gz_proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self._gz_proc.kill()
+                self._gz_proc = None
+                self._publishers = None
 
             for tool in ("gz", "ros2"):
                 sim.check_tool(tool)
@@ -106,7 +127,7 @@ class MyApp:
             print("Gazebo bereit.")
             return self._publishers
 
-    def _run_program_async(self, program_path: pathlib.Path) -> None:
+    def _run_program_async(self, program_path: pathlib.Path, on_done=None) -> None:
         """Startet ein Punktprogramm (siehe robot_program.py) in einem eigenen
         Thread, damit die GUI währenddessen bedienbar bleibt.
 
@@ -115,6 +136,14 @@ class MyApp:
         so kann man z.B. mitten in "Tisch" auf "Gelenkpose" klicken und der
         Arm wechselt sofort die Route, statt erst das alte Programm zu Ende
         abzufahren.
+
+        `on_done` (optional) wird aufgerufen, sobald DIESER Lauf regulär
+        endet oder mit einem Fehler abbricht - aber NICHT, wenn er durch
+        einen neuen Button-Klick (stop_event) abgebrochen wurde, da dann
+        ein anderer Ablauf die GUI übernimmt. Läuft im Hintergrund-Thread,
+        wird aber über `mainwindow.after(0, ...)` auf den Tkinter-Hauptthread
+        umgeleitet (Tkinter-Widgets dürfen nicht direkt aus einem anderen
+        Thread angefasst werden).
         """
         if self._program_thread is not None and self._program_thread.is_alive():
             self._stop_event.set()
@@ -133,6 +162,10 @@ class MyApp:
                     print(f"Programm '{program.name}' beendet.")
             except Exception as exc:  # noqa: BLE001 - im Hintergrund-Thread sichtbar loggen
                 print(f"Fehler beim Ausführen von '{program_path.name}': {exc}")
+                traceback.print_exc()
+            finally:
+                if on_done is not None and not stop_event.is_set():
+                    self.mainwindow.after(0, on_done)
 
         self._program_thread = threading.Thread(target=worker, daemon=True)
         self._program_thread.start()
@@ -144,6 +177,24 @@ class MyApp:
     def on_bttisch(self):
         """Button 'Tisch': fährt programs/beispiel_tisch.json ab."""
         self._run_program_async(PROGRAM_TISCH)
+
+    def on_button2pressed(self):
+        """Button 'Form Körper 1': zeigt window3 ('Programm läuft...') statt
+        des Hauptfensters und fährt programs/beispiel_figur1.json ab. Sobald
+        das Programm fertig ist (oder abbricht), schließt sich window3
+        wieder und das Hauptfenster erscheint erneut."""
+        self.mainwindow.withdraw()
+        if getattr(self, 'window3', None) is None:
+            self.window3 = self.builder.get_object('window3', self.mainwindow)
+            self.builder.connect_callbacks(self)
+        else:
+            self.window3.deiconify()
+
+        def back_to_main():
+            self.window3.withdraw()
+            self.mainwindow.deiconify()
+
+        self._run_program_async(PROGRAM_FIGUR1, on_done=back_to_main)
 
     def on_Fabipressed(self):
         self.mainwindow.withdraw()
@@ -181,8 +232,19 @@ class MyApp:
 
         # Gazebo direkt mit der GUI zusammen starten, statt erst beim ersten
         # Button-Klick - läuft im Hintergrund-Thread, damit das Fenster
-        # währenddessen nicht einfriert.
-        threading.Thread(target=self._ensure_simulation_running, daemon=True).start()
+        # währenddessen nicht einfriert. Fehler hier abfangen und deutlich
+        # loggen (nicht einfach den Thread lautlos sterben lassen) - sonst
+        # bleibt z.B. bei einem Timeout auf einem langsamen Rechner ein
+        # halbfertiger Zustand zurück, der erst beim nächsten Button-Klick
+        # mit einer verwirrenden Fehlermeldung auffällt.
+        def _auto_start():
+            try:
+                self._ensure_simulation_running()
+            except Exception:
+                print("Automatischer Gazebo-Start beim Öffnen ist fehlgeschlagen:")
+                traceback.print_exc()
+
+        threading.Thread(target=_auto_start, daemon=True).start()
 
         self.mainwindow.mainloop()
 
