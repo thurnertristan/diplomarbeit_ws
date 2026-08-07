@@ -34,7 +34,25 @@ VENV_PY="$VENV_DIR/bin/python3"
 
 if [ ! -x "$VENV_PY" ]; then
     echo "Kein venv gefunden, lege es unter $VENV_DIR an ..."
-    python3 -m venv "$VENV_DIR"
+    # --system-site-packages direkt bei der Erstellung, statt hinterher per
+    # sed in pyvenv.cfg zu fummeln (siehe Fix weiter unten für bereits
+    # bestehende venvs, die das noch nicht haben).
+    VENV_ERR=$(mktemp)
+    if ! python3 -m venv --system-site-packages "$VENV_DIR" 2>"$VENV_ERR"; then
+        cat "$VENV_ERR" >&2
+        rm -f "$VENV_ERR"
+        PYVER=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+        echo "" >&2
+        echo "Fehler: venv-Erstellung fehlgeschlagen - vermutlich fehlt das Systempaket" >&2
+        echo "für Python-venv-Unterstützung. Einmalig nachinstallieren mit:" >&2
+        echo "" >&2
+        echo "    sudo apt install python${PYVER}-venv" >&2
+        echo "" >&2
+        echo "Danach dieses Skript erneut ausführen: ./start_gui.sh" >&2
+        rm -rf "$VENV_DIR"
+        exit 1
+    fi
+    rm -f "$VENV_ERR"
 fi
 
 # Damit das venv zusätzlich zu seinen eigenen Paketen auch die apt-
