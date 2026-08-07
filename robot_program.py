@@ -293,6 +293,15 @@ def _build_travel_waypoints(point: Point, current_joints_rad: dict[str, float]) 
     # SAFE_TRAVEL_Z reduziert zusätzlich das Risiko, dass ALLE Kandidaten
     # einer einzigen großen Bewegung unsicher sind, indem er sie in drei
     # kleinere (und damit leichter sicher lösbare) Teilschritte zerlegt.
+    #
+    # Ein zusätzlicher Versuch, hier ADAPTIV per rekursiver Bisektion
+    # (kartesische Zwischenpunkte) nachzubessern, wurde wieder verworfen:
+    # bei den hartnäckigen Fällen in programs/beispiel_figur1.json (P7-P11)
+    # brachte das keine zuverlässige Verbesserung (teils sogar mehr
+    # Kollisionen) und war um Größenordnungen langsamer (>1 Minute statt
+    # <1s pro Punkt). Für die verbleibenden bekannten Problemfälle wurden
+    # stattdessen von Hand geprüfte sichere Zwischenpunkte in die
+    # Programmdatei selbst eingefügt (siehe deren Kommentare/Namen).
     try:
         retract = resolve_point(
             Point(name=f"{point.name} (Rückzug)", xyz=(current_xyz[0], current_xyz[1], sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
@@ -313,7 +322,7 @@ def run_program(
     publishers: dict,
     loop: bool = False,
     stop_event: "threading.Event | None" = None,
-) -> None:
+) -> dict[str, float]:
     """Fährt alle Punkte eines Programms nacheinander an.
 
     `publishers` sind gz-transport-Publisher pro Gelenk, wie sie
@@ -325,6 +334,10 @@ def run_program(
     Programme, die denselben Roboter ansteuern, sauber ablösen können (siehe
     gui/my_gui.py: ein Button-Klick während ein anderes Programm läuft
     bricht es ab und fährt stattdessen sofort die neue Route).
+
+    Gibt die zuletzt gesendete Gelenkpose zurück, damit ein Aufrufer (z.B.
+    die GUI für die Jog-Buttons) weiß, von wo aus als nächstes weitergefahren
+    werden kann.
     """
     Double = sim.import_gz("msgs", "double_pb2").Double
 
@@ -358,6 +371,8 @@ def run_program(
             break
         print("Programm-Ende erreicht, starte erneut (--loop) ...")
 
+    return current
+
 
 def dry_run_program(program: Program) -> bool:
     """Löst alle Punkte eines Programms auf und gibt die Gelenkwinkel aus,
@@ -387,8 +402,16 @@ def dry_run_program(program: Program) -> bool:
             print(f"  FEHLER bei '{point.name}': {exc}")
             all_ok = False
             continue
+        n = len(waypoints)
         for i, solution in enumerate(waypoints):
-            suffix = "" if len(waypoints) == 1 else (" (Rückzug)", " (Verfahren)", " (Ziel)")[i]
+            if n == 1:
+                suffix = ""
+            elif i == 0:
+                suffix = " (Rückzug)"
+            elif i == n - 1:
+                suffix = " (Ziel)"
+            else:
+                suffix = f" (Verfahren {i}/{n - 2})"
             degrees = {j: round(math.degrees(a), 2) for j, a in solution.items()}
             print(f"  '{point.name}'{suffix}: {degrees}")
             current = solution

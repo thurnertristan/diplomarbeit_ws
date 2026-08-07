@@ -118,8 +118,8 @@
         </child>
         <child>
           <object class="ttk.Button" id="button5">
-            <property name="image">platzhalter.png</property>
-            <property name="text" translatable="yes">button5</property>
+            <property name="command" type="command" cbtype="simple">on_beenden_pressed</property>
+            <property name="text" translatable="yes">Beenden</property>
             <layout manager="grid">
               <property name="column">1</property>
               <property name="row">3</property>
@@ -270,6 +270,103 @@
             <layout manager="grid">
               <property name="column">0</property>
               <property name="row">0</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="label10">
+            <property name="text" translatable="yes">Roboter Steuerung</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="row">1</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button6">
+            <property name="text" translatable="yes">x+</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">2</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button11">
+            <property name="text" translatable="yes">y-</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">3</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button14">
+            <property name="text" translatable="yes">y+</property>
+            <layout manager="grid">
+              <property name="column">2</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">3</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button15">
+            <property name="text" translatable="yes">x-</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">4</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="label12">
+            <property name="text" translatable="yes">Pause/Weiter
+</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="row">5</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button16">
+            <property name="command" type="command" cbtype="simple">on_pause_pressed</property>
+            <property name="text" translatable="yes">Pause</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">6</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button17">
+            <property name="command" type="command" cbtype="simple">on_weiter_pressed</property>
+            <property name="text" translatable="yes">Weiter</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">6</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button19">
+            <property name="command" type="command" cbtype="simple">on_abbruch_pressed</property>
+            <property name="text" translatable="yes">Abbruch</property>
+            <layout manager="grid">
+              <property name="column">2</property>
+              <property name="row">6</property>
             </layout>
           </object>
         </child>
