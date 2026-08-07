@@ -12,6 +12,11 @@ In diesem Workspace befindet sich eine kleine Python-Basis für die Robotersteue
 - `python3 robot_control.py stop`
 - `python3 robot_control.py status`
 
+## Programm start befehl
+source /opt/ros/jazzy/setup.bash
+source gui/venv/bin/activate
+python3 gui/my_gui.py
+
 Die Steuerung ist als leicht erweiterbares Beispiel gedacht und kann später
 an echte Hardware-Interfaces oder eine Simulation angepasst werden.
 

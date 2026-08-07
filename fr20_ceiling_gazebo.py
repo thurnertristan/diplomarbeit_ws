@@ -123,6 +123,17 @@ SAFE_STAGING_POSE = {
     "j6": -2.44500,
 }
 
+# Höhe, auf die robot_program.py beim Wechsel zwischen zwei kartesischen
+# Punkten zurückzieht, bevor seitlich verfahren wird (siehe run_program in
+# robot_program.py). Grund: Zwei für sich genommen sichere Punkte können
+# unterschiedliche Ellbogen-Konfigurationen brauchen - die reine
+# Gelenkraum-Interpolation zwischen ihnen schwingt dann oft tief durch den
+# Tisch, obwohl Start und Ziel beide sicher über der Tischplatte liegen
+# (siehe programs/beispiel_figur.json, mehrfach per Sweep-Analyse
+# nachgewiesen). Deutlich über TABLE_TOP_Z, damit auch bei einem
+# Ellbogen-Wechsel während des seitlichen Verfahrens genug Abstand bleibt.
+SAFE_TRAVEL_Z = 1.4
+
 # PID-Gains für die gz-sim JointPositionController-Plugins. Die schulternahen
 # Gelenke tragen mehr Last (Eigengewicht des hängenden Arms, FR20 = 20kg
 # Traglast, deutlich schwerere Glieder als beim UR10e) und brauchen daher

@@ -111,13 +111,89 @@ def _rpy_deg_to_matrix(rpy_deg: tuple[float, float, float]) -> np.ndarray:
     return kin._rpy_to_matrix(r, p, y)
 
 
-def resolve_point(point: Point, current_joints_rad: dict[str, float]) -> dict[str, float]:
+# Alternative Startwerte (j1, j2, j3, j4) für den Fallback in resolve_point,
+# falls die vom aktuellen Punkt aus fortgesetzte IK nicht konvergiert. Deckt
+# die üblichen Ellbogen-Konfigurationen ab (oben/unten, links/rechts), damit
+# auch große Sprünge zwischen zwei Punkten (z.B. quer über den Tisch) eine
+# Lösung finden, statt nur an einem lokalen Minimum nahe der alten Pose
+# hängenzubleiben. j5/j6 werden dabei aus dem bisherigen current_joints_rad
+# übernommen, da sie kaum Einfluss auf die grobe Erreichbarkeit haben.
+_FALLBACK_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5)
+_FALLBACK_ELBOWS = ((-1.5, -2.2, -1.2), (-1.5, 2.2, -1.2), (-0.5, -2.6, -1.5), (-0.5, 2.6, -1.5))
+
+_urdf_chain_cache: "kin.UrdfChain | None" = None
+
+
+def _get_chain() -> "kin.UrdfChain":
+    """Lädt die Gelenkkette einmalig aus dem generierten URDF (für die
+    Tisch-Kollisionsprüfung in resolve_point, siehe _is_transition_safe)."""
+    global _urdf_chain_cache
+    if _urdf_chain_cache is None:
+        sim.WORK_DIR.mkdir(exist_ok=True)
+        urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
+        if not urdf_path.exists():
+            sim.write_mount_urdf(urdf_path)
+        _urdf_chain_cache = kin.UrdfChain(urdf_path)
+    return _urdf_chain_cache
+
+
+_TABLE_CHECK_MARGIN_M = 0.05
+
+
+def _pose_hits_table(position: np.ndarray) -> bool:
+    hx, hy = sim.TABLE_SIZE_XY[0] / 2, sim.TABLE_SIZE_XY[1] / 2
+    tx, ty = sim.TABLE_CENTER
+    x, y, z = position
+    return (
+        tx - hx - _TABLE_CHECK_MARGIN_M <= x <= tx + hx + _TABLE_CHECK_MARGIN_M
+        and ty - hy - _TABLE_CHECK_MARGIN_M <= y <= ty + hy + _TABLE_CHECK_MARGIN_M
+        and z < sim.TABLE_TOP_Z + _TABLE_CHECK_MARGIN_M
+    )
+
+
+def _is_transition_safe(a: dict[str, float], b: dict[str, float], steps: int = 15) -> bool:
+    """Prüft per Sweep (lineare Gelenkraum-Interpolation zwischen a und b,
+    wie es die reale gz-sim JointPositionController-Bewegung annähert), ob
+    dabei irgendein Armglied den Tisch schneidet. Siehe Kommentar bei
+    resolve_point - zwei für sich sichere Posen können trotzdem über einen
+    unsicheren Zwischenweg verbunden sein, wenn sich dabei die
+    Ellbogen-Konfiguration stark ändert."""
+    chain = _get_chain()
+    for frac in np.linspace(0, 1, steps):
+        inter = {j: a[j] * (1 - frac) + b[j] * frac for j in sim.JOINT_NAMES}
+        t = np.eye(4)
+        for joint in chain.chain:
+            t = t @ kin._origin_transform(joint.find("origin"))
+            if joint.get("type") != "fixed":
+                t = t @ kin._axis_rotation(joint.find("axis"), inter[joint.get("name")])
+            if _pose_hits_table(t[:3, 3]):
+                return False
+    return True
+
+
+def resolve_point(
+    point: Point,
+    current_joints_rad: dict[str, float],
+    allow_fallback: bool = True,
+) -> dict[str, float]:
     """Berechnet die Ziel-Gelenkwinkel (rad) für einen Punkt.
 
     Für kartesische Punkte wird die numerische IK aus `fr20_kinematics`
     verwendet, mit der aktuellen Pose als Startwert (Seed) - dadurch bleibt
-    die gefundene Lösung nahe an der vorherigen Konfiguration, statt
+    die gefundene Lösung meist nahe an der vorherigen Konfiguration, statt
     zwischen mehreren möglichen Ellbogen-Stellungen zu springen.
+
+    Ist der Sprung zum Zielpunkt zu groß (z.B. weil ein Programm quer über
+    den Tisch springt), bleibt diese kontinuitätsbasierte Suche manchmal in
+    einem lokalen Minimum hängen, obwohl der Punkt eigentlich erreichbar
+    wäre. Deshalb wird bei einem Fehlschlag zusätzlich mit ein paar
+    alternativen Ellbogen-Konfigurationen (_FALLBACK_ELBOWS/_FALLBACK_J1)
+    gesucht - und zwar nicht nur die ERSTE gefundene Lösung genommen,
+    sondern unter allen gefundenen Kandidaten die bevorzugt, deren
+    Übergang von current_joints_rad aus nachweislich nicht durch den Tisch
+    schwingt (siehe _is_transition_safe). Das behebt genau das Problem, das
+    beim Debuggen von programs/beispiel_figur.json auftrat: mehrere gültige
+    IK-Lösungen existierten, aber die naiv erste gefundene kollidierte.
     """
     if point.joints_deg is not None:
         return {j: math.radians(deg) for j, deg in point.joints_deg.items()}
@@ -131,13 +207,37 @@ def resolve_point(point: Point, current_joints_rad: dict[str, float]) -> dict[st
     )
     target[:3, 3] = point.xyz
 
-    solution = kin.inverse_kinematics(target, current_joints_rad)
-    if solution is None:
+    candidates: list[dict[str, float]] = []
+    primary = kin.inverse_kinematics(target, current_joints_rad)
+    if primary is not None:
+        candidates.append(primary)
+
+    if allow_fallback:
+        for j1 in _FALLBACK_J1:
+            for j2, j3, j4 in _FALLBACK_ELBOWS:
+                seed = dict(current_joints_rad, j1=j1, j2=j2, j3=j3, j4=j4)
+                sol = kin.inverse_kinematics(target, seed)
+                if sol is not None:
+                    candidates.append(sol)
+                    if len(candidates) >= 8:  # genug Auswahl, nicht unnötig weitersuchen
+                        break
+            if len(candidates) >= 8:
+                break
+
+    if not candidates:
         raise RuntimeError(
             f"Keine IK-Lösung für Punkt '{point.name}' ({point.xyz}) gefunden - "
             f"Punkt evtl. außerhalb der Reichweite."
         )
-    return solution
+
+    for candidate in candidates:
+        if _is_transition_safe(current_joints_rad, candidate):
+            return candidate
+
+    # Keiner der Kandidaten ist nachweislich sicher - besser als nichts ist
+    # trotzdem die erste (kontinuitätsnächste) Lösung, aber der Aufrufer
+    # sollte das per Sweep-Analyse/--dry-run zusätzlich prüfen.
+    return candidates[0]
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +257,55 @@ def _interruptible_sleep(seconds: float, stop_event: "threading.Event | None") -
     deadline = time.time() + seconds
     while time.time() < deadline and not stop_event.is_set():
         time.sleep(min(0.05, deadline - time.time()))
+
+
+def _build_travel_waypoints(point: Point, current_joints_rad: dict[str, float]) -> list[dict[str, float]]:
+    """Baut die Gelenkziele, die für einen Punkt tatsächlich gesendet werden.
+
+    Bei kartesischen Zielen unterhalb von sim.SAFE_TRAVEL_Z wird zuerst auf
+    diese Höhe zurückgezogen (gleiche X/Y wie die aktuelle Pose), dann
+    seitlich zum Ziel verfahren, erst dann abgesenkt - statt direkt quer zu
+    fahren. Grund: Zwei für sich sichere Punkte können unterschiedliche
+    Ellbogen-Konfigurationen brauchen; die reine Gelenkraum-Interpolation
+    zwischen ihnen schwingt dann oft tief durch den Tisch (siehe
+    programs/beispiel_figur.json, per Sweep-Analyse nachgewiesen - vgl.
+    Kommentar bei SAFE_TRAVEL_Z in fr20_ceiling_gazebo.py). Auf der
+    Rückzugshöhe bleibt genug Abstand zum Tisch, auch wenn dabei die
+    Ellbogen-Konfiguration wechselt.
+
+    Bei Gelenkpose-Zielen (`joints`) oder wenn kaum seitliche Bewegung nötig
+    ist, wird direkt zum Ziel gefahren wie bisher.
+    """
+    if point.xyz is None:
+        return [resolve_point(point, current_joints_rad)]
+
+    x, y, z = point.xyz
+    if z >= sim.SAFE_TRAVEL_Z - 1e-6:
+        return [resolve_point(point, current_joints_rad)]
+
+    current_xyz = kin.forward_kinematics(current_joints_rad)[:3, 3]
+    lateral_dist = math.hypot(current_xyz[0] - x, current_xyz[1] - y)
+    if lateral_dist < 0.05:
+        return [resolve_point(point, current_joints_rad)]
+
+    # resolve_point wählt selbst unter mehreren IK-Kandidaten die per
+    # _is_transition_safe nachweislich tischsichere Lösung - der Rückzug auf
+    # SAFE_TRAVEL_Z reduziert zusätzlich das Risiko, dass ALLE Kandidaten
+    # einer einzigen großen Bewegung unsicher sind, indem er sie in drei
+    # kleinere (und damit leichter sicher lösbare) Teilschritte zerlegt.
+    try:
+        retract = resolve_point(
+            Point(name=f"{point.name} (Rückzug)", xyz=(current_xyz[0], current_xyz[1], sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
+            current_joints_rad,
+        )
+        travel = resolve_point(
+            Point(name=f"{point.name} (Verfahren)", xyz=(x, y, sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
+            retract,
+        )
+        final = resolve_point(point, travel)
+    except RuntimeError:
+        return [resolve_point(point, current_joints_rad)]
+    return [retract, travel, final]
 
 
 def run_program(
@@ -199,13 +348,53 @@ def run_program(
                 print("Programm abgebrochen.")
                 return
             print(f"-> Punkt '{point.name}'")
-            target = resolve_point(point, current)
-            send(target)
-            current = target
-            _interruptible_sleep(point.dwell_s, stop_event)
+            waypoints = _build_travel_waypoints(point, current)
+            for i, target in enumerate(waypoints):
+                send(target)
+                current = target
+                is_last = i == len(waypoints) - 1
+                _interruptible_sleep(point.dwell_s if is_last else 0.8, stop_event)
         if not loop or (stop_event is not None and stop_event.is_set()):
             break
         print("Programm-Ende erreicht, starte erneut (--loop) ...")
+
+
+def dry_run_program(program: Program) -> bool:
+    """Löst alle Punkte eines Programms auf und gibt die Gelenkwinkel aus,
+    OHNE Gazebo/ROS 2 zu starten und ohne irgendetwas an einen echten oder
+    simulierten Roboter zu senden.
+
+    Nützlich, um neue/geänderte Punkte in einer JSON-Datei schnell zu
+    prüfen (IK-Lösbarkeit, Sprünge zwischen Punkten) - genau das, was beim
+    Debuggen von programs/beispiel_drehung.json von Hand gemacht wurde,
+    hier als fester CLI-Modus. Baut dafür nur das URDF (reines Python,
+    kein externes Tool nötig) und nutzt SAFE_STAGING_POSE als Start-Seed,
+    wie es die echte run_program()-Ausführung auch täte.
+
+    Gibt True zurück, wenn alle Punkte aufgelöst werden konnten.
+    """
+    sim.WORK_DIR.mkdir(exist_ok=True)
+    urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
+    sim.write_mount_urdf(urdf_path)
+
+    print(f"[Dry-Run] Löse '{program.name}' auf, ausgehend von SAFE_STAGING_POSE (keine Simulation):\n")
+    current = dict(sim.SAFE_STAGING_POSE)
+    all_ok = True
+    for point in program.points:
+        try:
+            waypoints = _build_travel_waypoints(point, current)
+        except (ValueError, RuntimeError) as exc:
+            print(f"  FEHLER bei '{point.name}': {exc}")
+            all_ok = False
+            continue
+        for i, solution in enumerate(waypoints):
+            suffix = "" if len(waypoints) == 1 else (" (Rückzug)", " (Verfahren)", " (Ziel)")[i]
+            degrees = {j: round(math.degrees(a), 2) for j, a in solution.items()}
+            print(f"  '{point.name}'{suffix}: {degrees}")
+            current = solution
+
+    print("\nAlle Punkte gültig." if all_ok else "\nMindestens ein Punkt konnte nicht aufgelöst werden.")
+    return all_ok
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +410,11 @@ def main() -> None:
     )
     parser.add_argument("--loop", action="store_true", help="Programm nach Ende erneut abfahren")
     parser.add_argument("--headless", action="store_true", help="gz-sim ohne GUI starten")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Nur die Punkte auflösen und die Gelenkwinkel ausgeben, ohne Gazebo/ROS 2 zu starten.",
+    )
     args = parser.parse_args()
 
     if args.program is None:
@@ -235,6 +429,10 @@ def main() -> None:
 
     program = Program.from_file(Path(args.program))
     print(f"Lade Programm '{program.name}' mit {len(program.points)} Punkten.")
+
+    if args.dry_run:
+        ok = dry_run_program(program)
+        raise SystemExit(0 if ok else 1)
 
     for tool in ("gz", "ros2"):
         sim.check_tool(tool)
