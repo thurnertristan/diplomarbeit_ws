@@ -62,6 +62,25 @@ if grep -q "include-system-site-packages = false" "$VENV_DIR/pyvenv.cfg" 2>/dev/
     sed -i 's/include-system-site-packages = false/include-system-site-packages = true/' "$VENV_DIR/pyvenv.cfg"
 fi
 
+# Manche minimalen Debian/Ubuntu-Installationen erzeugen ein venv ohne
+# Fehlermeldung, lassen darin aber pip weg (ensurepip schlägt lautlos fehl,
+# meist weil python3-pip auf dem System fehlt). "python3 -m pip" statt dem
+# bin/pip-Skript zu benutzen ist außerdem robuster (funktioniert auch, wenn
+# die Pip-Shebang-Zeile kaputt/zu lang ist).
+if ! "$VENV_PY" -m pip --version >/dev/null 2>&1; then
+    echo "pip fehlt im venv, versuche es nachzuinstallieren (ensurepip) ..."
+    if ! "$VENV_PY" -m ensurepip --upgrade >/dev/null 2>&1; then
+        echo "" >&2
+        echo "Fehler: pip konnte im venv nicht bereitgestellt werden - vermutlich fehlt" >&2
+        echo "das Systempaket python3-pip. Einmalig nachinstallieren mit:" >&2
+        echo "" >&2
+        echo "    sudo apt install python3-pip" >&2
+        echo "" >&2
+        echo "Danach dieses Skript erneut ausführen: ./start_gui.sh" >&2
+        exit 1
+    fi
+fi
+
 MISSING=""
 for pkg in pygubu PIL numpy; do
     "$VENV_PY" -c "import $pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
@@ -69,7 +88,7 @@ done
 
 if [ -n "$MISSING" ]; then
     echo "Installiere fehlende Pakete:$MISSING ..."
-    "$VENV_DIR/bin/pip" install --quiet pygubu Pillow numpy
+    "$VENV_PY" -m pip install --quiet pygubu Pillow numpy
 fi
 
 exec "$VENV_PY" gui/my_gui.py
