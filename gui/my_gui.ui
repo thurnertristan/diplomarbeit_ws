@@ -24,14 +24,14 @@
     <resources />
   </project>
   <object class="tk.Toplevel" id="mainwindow" named="True">
-    <property name="height">800</property>
+    <property name="height">750</property>
     <property name="resizable">both</property>
-    <property name="title" translatable="yes">GUI</property>
-    <property name="width">1600</property>
+    <property name="title" translatable="yes">FR20 Robotersteuerung</property>
+    <property name="width">1200</property>
     <child>
       <object class="ttk.Frame" id="frame_main" named="True">
-        <property name="height">800</property>
-        <property name="width">1600</property>
+        <property name="height">750</property>
+        <property name="width">1200</property>
         <layout manager="grid">
           <property name="column">0</property>
           <property name="padx">15</property>
@@ -75,7 +75,7 @@
         <child>
           <object class="ttk.Button" id="button3">
             <property name="command" type="command" cbtype="simple">on_Fabipressed</property>
-            <property name="image">platzhalter.png</property>
+            <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">1</property>
               <property name="padx">20</property>
@@ -109,7 +109,7 @@
         </child>
         <child>
           <object class="ttk.Button" id="button4">
-            <property name="image">platzhalter.png</property>
+            <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="row">3</property>
@@ -126,12 +126,22 @@
             </layout>
           </object>
         </child>
+        <child>
+          <object class="ttk.Button" id="button18">
+            <property name="command" type="command" cbtype="simple">on_kalibrierung_pressed</property>
+            <property name="text" translatable="yes">Kalibrierung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="row">4</property>
+            </layout>
+          </object>
+        </child>
       </object>
     </child>
   </object>
   <object class="tk.Toplevel" id="window2" named="True">
     <property name="height">200</property>
-    <property name="title" translatable="yes">Steuerung </property>
+    <property name="title" translatable="yes">Manuelle Steuerung</property>
     <property name="width">200</property>
     <child>
       <object class="ttk.Frame" id="frame_window2" named="True">
@@ -214,7 +224,7 @@
         <child>
           <object class="ttk.Button" id="button12">
             <property name="command" type="command" cbtype="simple">on_btgelenk</property>
-            <property name="text" translatable="yes">button12</property>
+            <property name="text" translatable="yes">Start</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="row">7</property>
@@ -224,7 +234,7 @@
         <child>
           <object class="ttk.Button" id="button13">
             <property name="command" type="command" cbtype="simple">on_bttisch</property>
-            <property name="text" translatable="yes">button13</property>
+            <property name="text" translatable="yes">Start</property>
             <layout manager="grid">
               <property name="column">01</property>
               <property name="row">7</property>
@@ -254,12 +264,13 @@
     </child>
   </object>
   <object class="tk.Toplevel" id="window3" named="True">
-    <property name="height">200</property>
-    <property name="width">200</property>
+    <property name="height">420</property>
+    <property name="title" translatable="yes">Programm läuft</property>
+    <property name="width">480</property>
     <child>
       <object class="ttk.Frame" id="frame_window3" named="True">
-        <property name="height">200</property>
-        <property name="width">200</property>
+        <property name="height">420</property>
+        <property name="width">480</property>
         <layout manager="grid">
           <property name="column">0</property>
           <property name="row">0</property>
@@ -366,6 +377,140 @@
             <property name="text" translatable="yes">Abbruch</property>
             <layout manager="grid">
               <property name="column">2</property>
+              <property name="row">6</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window4" named="True">
+    <property name="height">480</property>
+    <property name="title" translatable="yes">Nullpunkt-Kalibrierung</property>
+    <property name="width">560</property>
+    <child>
+      <object class="ttk.Frame" id="frame_window4" named="True">
+        <property name="height">480</property>
+        <property name="width">560</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label14">
+            <property name="text" translatable="yes">Nullpunkt-Kalibrierung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">3</property>
+              <property name="padx">20</property>
+              <property name="pady">10</property>
+              <property name="row">0</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="label15">
+            <property name="text" translatable="yes">Falls sich der Tisch verschoben hat: Roboter per Jog exakt
+auf die vordere linke Tischecke (Tischhöhe) fahren, dann
+"Nullpunkt kalibrieren" drücken. Ohne Verschiebung einfach
+direkt "Weiter" drücken.</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">3</property>
+              <property name="padx">20</property>
+              <property name="pady">10</property>
+              <property name="row">1</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button23">
+            <property name="text" translatable="yes">x+</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">2</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button25">
+            <property name="text" translatable="yes">y+</property>
+            <layout manager="grid">
+              <property name="column">2</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">3</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button26">
+            <property name="text" translatable="yes">y-</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">3</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button24">
+            <property name="text" translatable="yes">x-</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">4</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button27">
+            <property name="text" translatable="yes">z+</property>
+            <layout manager="grid">
+              <property name="column">3</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">2</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button28">
+            <property name="text" translatable="yes">z-</property>
+            <layout manager="grid">
+              <property name="column">3</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">4</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button29">
+            <property name="command" type="command" cbtype="simple">on_kalibrieren_pressed</property>
+            <property name="text" translatable="yes">Nullpunkt kalibrieren</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">4</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">5</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button30">
+            <property name="command" type="command" cbtype="simple">on_kalibrierung_weiter_pressed</property>
+            <property name="text" translatable="yes">Weiter</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">4</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
               <property name="row">6</property>
             </layout>
           </object>

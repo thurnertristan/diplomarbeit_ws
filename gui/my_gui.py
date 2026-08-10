@@ -2,10 +2,11 @@ import pathlib
 import subprocess
 import sys
 import threading
-import time
 import traceback
 
 import pygubu
+import tkinter as tk
+from tkinter import messagebox, ttk
 from PIL import Image, ImageTk
 
 PROJECT_PATH = pathlib.Path(__file__).parent
@@ -36,8 +37,19 @@ class MyApp:
         builder.add_resource_path(PROJECT_PATH)
         builder.add_from_file(PROJECT_UI)
         self.mainwindow = builder.get_object('mainwindow', master)
+        self._apply_style()
         builder.connect_callbacks(self)
         self._images = {}
+
+        # Kachel-Überschriften ("Form Körper N") und der "Beenden"-Knopf
+        # gehören zu mainwindow und sind damit schon jetzt gebaut - Buttons
+        # in window2/window3 werden erst bei deren erstem Öffnen gestylt
+        # (siehe on_Fabipressed/on_button2pressed), da pygubu sie vorher
+        # noch nicht erzeugt hat.
+        for label_id in ("label1", "label2", "label4", "label5"):
+            self._style_widget(label_id, "Header.TLabel")
+        self._style_widget("button5", "Danger.TButton")
+        self._style_widget("button18", "Warning.TButton")
 
         # Zustand der Gazebo-Simulation/Programmausführung, siehe
         # _ensure_simulation_running() und _run_program_async().
@@ -59,7 +71,8 @@ class MyApp:
         self._pose_lock = threading.Lock()
 
         # Gesetzt = Programmausführung pausiert (siehe on_pause_pressed/
-        # on_weiter_pressed/_wait_while_paused). Während der Pause dürfen
+        # on_weiter_pressed sowie robot_program.run_program's pause_event).
+        # Während der Pause dürfen
         # die Jog-Buttons den Roboter bewegen, ohne dass das Programm
         # gleichzeitig weiterläuft und sich mit ihnen in die Quere kommt.
         self._pause_event = threading.Event()
@@ -75,6 +88,48 @@ class MyApp:
         photo = ImageTk.PhotoImage(img)
         self._images[widget_id] = photo                      # Referenz behalten!
         self.builder.get_object(widget_id).configure(image=photo)
+
+    def _apply_style(self) -> None:
+        """Einheitliches, modernes Erscheinungsbild für die ganze GUI -
+        bewusst hier in Python statt in der .ui-Datei: pygubu-Designer
+        schreibt die .ui beim Speichern komplett neu und würde reine
+        XML-Anpassungen sonst wieder verwerfen (mehrfach passiert), Styles
+        aus Python bleiben davon unberührt.
+        """
+        style = ttk.Style(self.mainwindow)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass  # "clam" nicht verfügbar - beim Standard-Theme bleiben
+
+        bg = "#f2f4f7"
+        text = "#20242b"
+        base_font = ("Helvetica", 11)
+
+        self.mainwindow.configure(background=bg)
+        style.configure("TFrame", background=bg)
+        style.configure("TLabel", background=bg, foreground=text, font=base_font)
+        style.configure("Header.TLabel", background=bg, foreground=text, font=("Helvetica", 13, "bold"))
+        style.configure("TButton", font=base_font, padding=(14, 10))
+
+        def colored_button(name: str, color: str, active: str) -> None:
+            style.configure(name, background=color, foreground="white", font=base_font, padding=(14, 10))
+            style.map(name, background=[("active", active), ("disabled", "#c8ccd2")])
+
+        colored_button("Primary.TButton", "#2f6fed", "#245ac9")   # Start
+        colored_button("Success.TButton", "#2f9e57", "#22803f")   # Weiter
+        colored_button("Warning.TButton", "#d98c00", "#b57400")   # Pause
+        colored_button("Danger.TButton", "#d9453f", "#b7332e")    # Beenden/Abbruch
+        colored_button("Jog.TButton", "#586470", "#414a54")       # X/Y-Jog
+
+    def _style_widget(self, widget_id: str, style_name: str | None = None, text: str | None = None) -> None:
+        """Setzt Style und/oder Text eines schon gebauten Widgets - kleiner
+        Helfer, um Wiederholung bei den vielen Button-Anpassungen zu sparen."""
+        widget = self.builder.get_object(widget_id)
+        if style_name is not None:
+            widget.configure(style=style_name)
+        if text is not None:
+            widget.configure(text=text)
 
 
 
@@ -114,33 +169,8 @@ class MyApp:
                 self._gz_proc = None
                 self._publishers = None
 
-            for tool in ("gz", "ros2"):
-                sim.check_tool(tool)
-            sim.isolate_gz_partition()
-
-            sim.WORK_DIR.mkdir(exist_ok=True)
-            urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-            world_path = sim.WORK_DIR / "world.sdf"
-
             print("Starte Gazebo (FR20, transparente Wände) ...")
-            sim.write_mount_urdf(urdf_path)
-            sim.append_joint_position_controllers(urdf_path)
-            robot_model_sdf = sim.urdf_to_sdf_model(urdf_path)
-            world_path.write_text(sim.build_world_sdf(robot_model_sdf))
-
-            self._gz_proc = subprocess.Popen(
-                ["gz", "sim", "-r", str(world_path)], env=sim.gazebo_env_with_fr20_meshes()
-            )
-            sim.wait_for_world(sim.WORLD_NAME)
-            time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
-
-            Node = sim.import_gz("transport").Node
-            Double = sim.import_gz("msgs", "double_pb2").Double
-
-            node = Node()
-            self._publishers = {
-                j: node.advertise(f"/{sim.MODEL_NAME}/{j}/cmd_pos", Double) for j in sim.JOINT_NAMES
-            }
+            self._gz_proc, self._publishers = sim.launch_simulation()
 
             # Roboter spawnt physikalisch in der Null-Stellung - zunächst die
             # kollisionsfreie Zwischenpose anfahren, bevor irgendein Button
@@ -154,9 +184,17 @@ class MyApp:
             print("Gazebo bereit.")
             return self._publishers
 
-    def _run_program_async(self, program_path: pathlib.Path, on_done=None) -> None:
+    def _run_program_async(self, program_source: "pathlib.Path | rp.Program", on_done=None) -> None:
         """Startet ein Punktprogramm (siehe robot_program.py) in einem eigenen
         Thread, damit die GUI währenddessen bedienbar bleibt.
+
+        `program_source` ist entweder ein Pfad zu einer Programmdatei (wird
+        hier geladen) oder bereits ein fertiges Program-Objekt (z.B.
+        rp.build_calibration_program() für den Kalibrierungs-Button) - beide
+        laufen über denselben stop_event/self._program_thread-Mechanismus,
+        damit sich AUCH die automatische Kalibrierfahrt sauber von einem
+        anderen Programm ablösen lässt bzw. selbst abgelöst werden kann,
+        statt als nicht-abbrechbarer Sonderfall nebenher zu laufen.
 
         Läuft bereits ein anderes Programm, wird es zuerst über stop_event
         abgebrochen (spätestens am Ende des gerade angefahrenen Punkts) -
@@ -180,16 +218,38 @@ class MyApp:
         self._stop_event = stop_event
         self._pause_event.clear()  # ein neu gestartetes Programm startet nie pausiert
 
+        def get_current() -> dict:
+            with self._pose_lock:
+                return self._current_joints
+
+        def set_current(target: dict) -> None:
+            with self._pose_lock:
+                self._current_joints = target
+
         def worker() -> None:
+            program_name = "?"
             try:
                 publishers = self._ensure_simulation_running()
-                program = rp.Program.from_file(program_path)
+                program = (
+                    rp.Program.from_file(program_source)
+                    if isinstance(program_source, pathlib.Path)
+                    else program_source
+                )
+                program_name = program.name
                 print(f"Starte Programm '{program.name}' ...")
-                self._run_points(program, publishers, stop_event)
+                rp.run_program(
+                    program,
+                    publishers,
+                    stop_event=stop_event,
+                    pause_event=self._pause_event,
+                    current=get_current(),
+                    get_current=get_current,
+                    on_target_sent=set_current,
+                )
                 if not stop_event.is_set():
                     print(f"Programm '{program.name}' beendet.")
             except Exception as exc:  # noqa: BLE001 - im Hintergrund-Thread sichtbar loggen
-                print(f"Fehler beim Ausführen von '{program_path.name}': {exc}")
+                print(f"Fehler beim Ausführen von '{program_name}': {exc}")
                 traceback.print_exc()
             finally:
                 if on_done is not None and not stop_event.is_set():
@@ -197,53 +257,6 @@ class MyApp:
 
         self._program_thread = threading.Thread(target=worker, daemon=True)
         self._program_thread.start()
-
-    def _wait_while_paused(self, stop_event: threading.Event) -> None:
-        """Blockiert, solange self._pause_event gesetzt ist (siehe
-        on_pause_pressed), kehrt aber sofort zurück, falls das Programm
-        währenddessen komplett abgebrochen wird (stop_event)."""
-        while self._pause_event.is_set() and not stop_event.is_set():
-            time.sleep(0.1)
-
-    def _run_points(self, program: rp.Program, publishers: dict, stop_event: threading.Event) -> None:
-        """Fährt die Punkte eines Programms ab - eigene, GUI-spezifische
-        Schleife statt robot_program.run_program(), aus zwei Gründen:
-
-        1. Pausierbar (on_pause_pressed/on_weiter_pressed): vor jedem
-           Zwischenschritt wird gewartet, solange _pause_event gesetzt ist.
-        2. Nutzt self._current_joints (mit self._pose_lock) als gemeinsamen
-           Positions-Zustand mit den Jog-Buttons - wird während einer Pause
-           gejoggt, macht das Programm beim Fortsetzen genau dort weiter,
-           wo der Jog den Arm hingefahren hat, statt die alte Position vor
-           der Pause anzunehmen.
-        """
-        Double = sim.import_gz("msgs", "double_pb2").Double
-
-        def send(joint_angles: dict) -> None:
-            for joint, angle in joint_angles.items():
-                msg = Double()
-                msg.data = angle
-                publishers[joint].publish(msg)
-
-        for point in program.points:
-            self._wait_while_paused(stop_event)
-            if stop_event.is_set():
-                print("Programm abgebrochen.")
-                return
-            print(f"-> Punkt '{point.name}'")
-            with self._pose_lock:
-                current = self._current_joints
-            waypoints = rp._build_travel_waypoints(point, current)
-            for i, target in enumerate(waypoints):
-                self._wait_while_paused(stop_event)
-                if stop_event.is_set():
-                    print("Programm abgebrochen.")
-                    return
-                send(target)
-                with self._pose_lock:
-                    self._current_joints = target
-                is_last = i == len(waypoints) - 1
-                rp._interruptible_sleep(point.dwell_s if is_last else 0.8, stop_event)
 
     def on_btgelenk(self):
         """Button 'Gelenkpose': fährt programs/beispiel_gelenkpose.json ab."""
@@ -253,8 +266,8 @@ class MyApp:
         """Button 'Tisch': fährt programs/beispiel_tisch.json ab."""
         self._run_program_async(PROGRAM_TISCH)
 
-    def _jog(self, dx: float = 0.0, dy: float = 0.0) -> bool:
-        """Bewegt den Arm um einen kleinen Schritt (JOG_STEP_M) in X/Y,
+    def _jog(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> bool:
+        """Bewegt den Arm um einen kleinen Schritt (JOG_STEP_M) in X/Y/Z,
         ausgehend von der zuletzt bekannten Pose (self._current_joints).
         Gibt True zurück, wenn der Schritt gesendet wurde - False, wenn er
         verweigert wurde oder fehlschlug (dann bricht _hold_jog das
@@ -292,7 +305,7 @@ class MyApp:
 
         pose = kin.forward_kinematics(current)
         x, y, z = pose[:3, 3]
-        target = rp.Point(name="Jog", xyz=(x + dx, y + dy, z))
+        target = rp.Point(name="Jog", xyz=(x + dx, y + dy, z + dz))
         try:
             solution = rp.resolve_point(target, current, allow_fallback=False)
         except (ValueError, RuntimeError) as exc:
@@ -309,7 +322,7 @@ class MyApp:
             self._current_joints = solution
         return True
 
-    def _hold_jog(self, dx: float = 0.0, dy: float = 0.0) -> None:
+    def _hold_jog(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> None:
         """Wird beim Drücken eines Jog-Buttons aufgerufen und fährt sofort
         einen Schritt, plant sich danach per `after()` selbst alle
         JOG_REPEAT_MS erneut ein - so bewegt sich der Arm statisch weiter,
@@ -317,10 +330,10 @@ class MyApp:
         bricht die Kette wieder ab. Bricht auch von selbst ab, wenn `_jog`
         fehlschlägt (z.B. Reichweitenende erreicht), statt sinnlos weiter
         zu versuchen."""
-        if not self._jog(dx=dx, dy=dy):
+        if not self._jog(dx=dx, dy=dy, dz=dz):
             self._jog_after_id = None
             return
-        self._jog_after_id = self.mainwindow.after(JOG_REPEAT_MS, lambda: self._hold_jog(dx, dy))
+        self._jog_after_id = self.mainwindow.after(JOG_REPEAT_MS, lambda: self._hold_jog(dx, dy, dz))
 
     def _release_jog(self) -> None:
         """Beendet die per _hold_jog gestartete Wiederholung (Loslassen des
@@ -329,14 +342,18 @@ class MyApp:
             self.mainwindow.after_cancel(self._jog_after_id)
             self._jog_after_id = None
 
-    def _bind_jog_hold(self, widget_id: str, dx: float = 0.0, dy: float = 0.0) -> None:
+    def _bind_jog_hold(
+        self, widget_id: str, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, symbol: str = ""
+    ) -> None:
         """Verbindet einen Jog-Button mit Drücken-halten-loslassen statt
-        eines einfachen Klicks (siehe _hold_jog/_release_jog). Wird beim
-        erstmaligen Öffnen von window2 aufgerufen (siehe on_Fabipressed) -
+        eines einfachen Klicks (siehe _hold_jog/_release_jog), und stylt ihn
+        einheitlich mit einem Pfeilsymbol statt "x+"/"y-" o.ä. Wird beim
+        erstmaligen Öffnen von window3 aufgerufen (siehe on_button2pressed) -
         vorher existiert das Widget in pygubu noch nicht."""
         widget = self.builder.get_object(widget_id, self.mainwindow)
-        widget.bind("<ButtonPress-1>", lambda event: self._hold_jog(dx, dy))
+        widget.bind("<ButtonPress-1>", lambda event: self._hold_jog(dx, dy, dz))
         widget.bind("<ButtonRelease-1>", lambda event: self._release_jog())
+        widget.configure(style="Jog.TButton", text=symbol)
 
     def on_pause_pressed(self):
         """Button 'Pause' (button16): pausiert das laufende Punktprogramm,
@@ -363,7 +380,7 @@ class MyApp:
         """Button 'Abbruch' (button19): bricht ein laufendes Punktprogramm
         sofort und endgültig ab (nicht nur pausieren) - Gazebo und die GUI
         bleiben dabei offen. Hebt eine evtl. aktive Pause zuerst auf, damit
-        _wait_while_paused nicht auf das gleich folgende stop_event wartet,
+        run_program() nicht auf das gleich folgende stop_event wartet,
         statt sofort abzubrechen."""
         if self._program_thread is None or not self._program_thread.is_alive():
             print("Kein Programm läuft gerade - Abbruch hat nichts zu tun.")
@@ -372,6 +389,108 @@ class MyApp:
         self._stop_event.set()
         self._program_thread.join(timeout=5.0)
         print("Programm abgebrochen.")
+
+    def _open_calibration_window(self):
+        """Öffnet das Kalibrierungs-Fenster (window4) - einmalig automatisch
+        beim GUI-Start (siehe run()), bevor das Hauptfenster mit den
+        Programm-Buttons überhaupt sichtbar wird, und danach jederzeit
+        erneut über den Button 'Kalibrierung' im Hauptfenster (siehe
+        on_kalibrierung_pressed), falls der Tisch später nochmal
+        verrutscht. Baut die Jog-Buttons beim allerersten Öffnen (siehe
+        _bind_jog_hold) - vorher existieren die Widgets in pygubu noch
+        nicht."""
+        self.mainwindow.withdraw()
+        if getattr(self, 'window4', None) is None:
+            self.window4 = self.builder.get_object('window4', self.mainwindow)
+            self.builder.connect_callbacks(self)
+            self._bind_jog_hold('button23', dx=JOG_STEP_M, symbol="X ▸")
+            self._bind_jog_hold('button24', dx=-JOG_STEP_M, symbol="◂ X")
+            self._bind_jog_hold('button25', dy=JOG_STEP_M, symbol="Y ▴")
+            self._bind_jog_hold('button26', dy=-JOG_STEP_M, symbol="Y ▾")
+            self._bind_jog_hold('button27', dz=JOG_STEP_M, symbol="Z ▴")
+            self._bind_jog_hold('button28', dz=-JOG_STEP_M, symbol="Z ▾")
+            self._style_widget("button29", "Primary.TButton")
+            self._style_widget("button30", "Success.TButton")
+        else:
+            self.window4.deiconify()
+        self.window4.lift()
+        self.window4.attributes('-topmost', True)
+        self.window4.update()
+        self.window4.attributes('-topmost', False)
+        self.window4.focus_force()
+
+    def on_kalibrierung_pressed(self):
+        """Button 'Kalibrierung' im Hauptfenster (button18): öffnet das
+        Kalibrierungs-Fenster erneut, falls der Tisch nach dem ersten
+        Kalibrieren beim GUI-Start nochmal verrutscht."""
+        self._open_calibration_window()
+
+    def on_kalibrierung_weiter_pressed(self):
+        """Button 'Weiter' im Kalibrierungs-Fenster (button30): schließt die
+        Kalibrierung ab - mit oder ohne tatsächliches Neukalibrieren (siehe
+        on_kalibrieren_pressed), ein zuvor gespeicherter Tisch-Offset gilt
+        einfach unverändert weiter - und zeigt das Hauptfenster mit den
+        Programm-Buttons. Vor dem allerersten Aufruf dieses Buttons ist das
+        Hauptfenster nicht erreichbar (siehe run()), es kann also kein
+        Programm gestartet werden, bevor der Nutzer diese Kalibrierung
+        gesehen/bestätigt hat."""
+        self._release_jog()
+        self.window4.withdraw()
+        self.mainwindow.deiconify()
+        self.mainwindow.lift()
+        self.mainwindow.focus_force()
+
+    def on_kalibrieren_pressed(self):
+        """Button 'Nullpunkt kalibrieren' (button29 im Kalibrierungs-Fenster):
+        fährt den Roboter zunächst automatisch auf den markanten Kalibrierpunkt
+        (sim.CALIBRATION_REFERENCE_XYZ, siehe Kommentar dort - ein Punkt auf
+        der Baugruppe statt einer bloßen Tischkante), damit der Nutzer nicht
+        mehr den kompletten Weg per Jog manuell zurücklegen muss. Erst danach
+        erscheint der Bestätigungsdialog: von dort kann per Jog noch
+        feinjustiert werden (falls die Baugruppe leicht verrutscht ist),
+        bevor bestätigt wird - dann wird aus der aktuellen Pose der neue
+        Tisch-Offset berechnet und gespeichert (siehe
+        robot_program.calibrate_table_offset) und ab dem nächsten gesendeten
+        Punkt automatisch auf alle kartesischen Programmziele angewendet
+        (siehe robot_program.run_program).
+
+        Läuft über denselben _run_program_async-Mechanismus wie die anderen
+        Programm-Buttons (Gelenkpose/Tisch/Figur1) - wichtig, damit diese
+        Fahrt genau wie jedes andere Programm über stop_event abgebrochen
+        bzw. von einem anderen Button sauber abgelöst werden kann, statt als
+        nicht-unterbrechbarer Sonderfall mit einem eigenen, losgelösten
+        Thread zu laufen (der z.B. beim Wechsel auf 'Figur1' mitten in der
+        Kalibrierfahrt hängen bliebe und dessen Gelenkbefehle sich dann mit
+        denen des neuen Programms überschneiden würden)."""
+        self._run_program_async(rp.build_calibration_program(), on_done=self._confirm_and_calibrate)
+
+    def _confirm_and_calibrate(self) -> None:
+        """Zweiter Teil von on_kalibrieren_pressed, nachdem der Roboter den
+        Kalibrierpunkt automatisch angefahren hat (läuft auf dem
+        Tkinter-Hauptthread, siehe mainwindow.after in on_kalibrieren_pressed)."""
+        with self._pose_lock:
+            current = self._current_joints
+        if current is None:
+            print("Kalibrierung nicht möglich: Simulation ist noch nicht bereit.")
+            return
+
+        if not messagebox.askyesno(
+            "Nullpunkt kalibrieren",
+            "Der Roboter wurde automatisch auf den Kalibrierpunkt gefahren. "
+            "Steht der Werkzeugmittelpunkt exakt auf der markanten Stelle "
+            "auf der Baugruppe? Falls nicht, jetzt per Jog feinjustieren, "
+            "dann bestätigen.\n\n"
+            "Der neue Tisch-Offset wird sofort gespeichert und auf alle "
+            "künftigen Programmläufe angewendet.",
+        ):
+            return
+
+        dx, dy, dz = rp.calibrate_table_offset(current)
+        print(f"Tisch-Offset kalibriert: dx={dx:+.4f} dy={dy:+.4f} dz={dz:+.4f} m")
+        messagebox.showinfo(
+            "Nullpunkt kalibriert",
+            f"Neuer Tisch-Offset gespeichert:\ndx = {dx:+.4f} m\ndy = {dy:+.4f} m\ndz = {dz:+.4f} m",
+        )
 
     def on_button2pressed(self):
         """Button 'Form Körper 1': zeigt window3 ('Programm läuft...') statt
@@ -389,10 +508,16 @@ class MyApp:
             # Jog-Buttons auf "gedrückt halten" statt Einzelklick umstellen
             # (siehe _bind_jog_hold) - erst hier möglich, da die Widgets in
             # window3 vorher noch nicht existieren.
-            self._bind_jog_hold('button6', dx=JOG_STEP_M)
-            self._bind_jog_hold('button15', dx=-JOG_STEP_M)
-            self._bind_jog_hold('button14', dy=JOG_STEP_M)
-            self._bind_jog_hold('button11', dy=-JOG_STEP_M)
+            self._bind_jog_hold('button6', dx=JOG_STEP_M, symbol="X ▸")
+            self._bind_jog_hold('button15', dx=-JOG_STEP_M, symbol="◂ X")
+            self._bind_jog_hold('button14', dy=JOG_STEP_M, symbol="Y ▴")
+            self._bind_jog_hold('button11', dy=-JOG_STEP_M, symbol="Y ▾")
+            self._bind_jog_hold('button20', dz=JOG_STEP_M, symbol="Z ▴")
+            self._bind_jog_hold('button21', dz=-JOG_STEP_M, symbol="Z ▾")
+            self._style_widget("button16", "Warning.TButton")
+            self._style_widget("button17", "Success.TButton")
+            self._style_widget("button19", "Danger.TButton")
+            self._style_widget("button22", "Primary.TButton")
         else:
             self.window3.deiconify()
 
@@ -407,6 +532,9 @@ class MyApp:
         if getattr(self, 'window2', None) is None:
             self.window2 = self.builder.get_object('window2', self.mainwindow)
             self.builder.connect_callbacks(self)   # <-- Callbacks für window2 verbinden!
+            self.window2.configure(background="#f2f4f7")
+            self._style_widget("button12", "Primary.TButton")
+            self._style_widget("button13", "Primary.TButton")
         else:
             self.window2.deiconify()
 
@@ -437,12 +565,14 @@ class MyApp:
 
     def run(self):
         self.mainwindow.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.mainwindow.deiconify()
-        self.mainwindow.lift()
-        self.mainwindow.attributes('-topmost', True)
-        self.mainwindow.update()
-        self.mainwindow.attributes('-topmost', False)
-        self.mainwindow.focus_force()
+
+        # Zuerst die Kalibrierung zeigen (siehe _open_calibration_window) -
+        # das Hauptfenster mit den Programm-Buttons bleibt verborgen, bis
+        # "Weiter" dort gedrückt wird (siehe on_kalibrierung_weiter_pressed).
+        # So kann kein Programm gestartet werden, ohne vorher zumindest die
+        # Möglichkeit zur Kalibrierung gesehen zu haben.
+        self._open_calibration_window()
+        self.window4.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Gazebo direkt mit der GUI zusammen starten, statt erst beim ersten
         # Button-Klick - läuft im Hintergrund-Thread, damit das Fenster

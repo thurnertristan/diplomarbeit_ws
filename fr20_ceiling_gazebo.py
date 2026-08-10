@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import os
 import shutil
 import subprocess
@@ -117,6 +118,34 @@ TABLE_SIZE_XY = (
     ASSEMBLY_SIZE_XY_M[0] + 2 * TABLE_MARGIN_M,
     ASSEMBLY_SIZE_XY_M[1] + 2 * TABLE_MARGIN_M + 2 * TABLE_END_OVERHANG_M,
 )
+
+# Referenzpunkt für die Nullpunkt-Kalibrierung (siehe load_table_offset()/
+# save_table_offset() unten sowie GUI-Button "Nullpunkt kalibrieren"): ein
+# markanter Punkt auf der Baugruppe selbst (ihre Bounding-Box-Mitte) statt
+# einer bloßen Tischkante - eindeutig wiederzufinden statt einer
+# unspezifischen Kante. Die Baugruppen-Mitte liegt fast exakt auf der
+# Mount-Achse des Roboters (Totzone von ca. 0.3 m Radius, siehe Kommentar bei
+# LOOK_AT_TABLE_POSE, dort ist die IK ebenfalls nicht lösbar), daher der
+# gleiche Versatz von 0.3/-0.1 m wie bei LOOK_AT_TABLE_POSE. robot_program.py
+# fährt diesen Punkt beim Kalibrieren automatisch per IK an (siehe
+# robot_program.build_calibration_program) - der Nutzer justiert von dort nur
+# noch per Jog fein nach, statt komplett manuell hinzufahren zu müssen.
+# Rutscht die Baugruppe, wird die Differenz zwischen dieser Soll-Position und
+# der tatsächlich angetasteten Ist-Position als TABLE_OFFSET gespeichert und
+# danach auf alle kartesischen Programmpunkte addiert (siehe
+# robot_program.resolve_point).
+CALIBRATION_REFERENCE_XYZ = (
+    TABLE_CENTER[0] - ASSEMBLY_XY_OFFSET_M[0] + 0.3,
+    TABLE_CENTER[1] - ASSEMBLY_XY_OFFSET_M[1] - 0.1,
+    TABLE_TOP_Z - ASSEMBLY_MIN_Z_M,
+)
+
+# Persistierter Tisch-Offset (dx, dy, dz in m) aus der letzten Kalibrierung -
+# siehe load_table_offset()/save_table_offset(). Bewusst eine eigene Datei
+# statt eines Werts im Code, damit eine Kalibrierung nicht bei jedem
+# Programmstart neu recherchiert/eingetragen werden muss und über GUI-Starts
+# hinweg erhalten bleibt.
+TABLE_OFFSET_PATH = REPO_ROOT / "table_offset.json"
 
 # Gelenkreihenfolge, wie sie fairino_description für den FR20 verwendet
 # (base_link -> j1 -> shoulder_link -> j2 -> upperarm_link -> j3 ->
@@ -238,6 +267,21 @@ def check_tool(name: str) -> None:
             f"(z.B. 'source /opt/ros/jazzy/setup.bash') und die benötigten "
             f"Pakete installieren (siehe Docstring am Kopf dieser Datei)."
         )
+
+
+def load_table_offset() -> tuple[float, float, float]:
+    """Lädt den zuletzt kalibrierten Tisch-Offset (dx, dy, dz in m, siehe
+    CALIBRATION_REFERENCE_XYZ/save_table_offset). Ohne vorherige
+    Kalibrierung (Datei fehlt): (0, 0, 0), also keine Korrektur."""
+    if not TABLE_OFFSET_PATH.exists():
+        return (0.0, 0.0, 0.0)
+    data = json.loads(TABLE_OFFSET_PATH.read_text())
+    return (data["dx"], data["dy"], data["dz"])
+
+
+def save_table_offset(dx: float, dy: float, dz: float) -> None:
+    """Speichert einen neu kalibrierten Tisch-Offset, siehe load_table_offset()."""
+    TABLE_OFFSET_PATH.write_text(json.dumps({"dx": dx, "dy": dy, "dz": dz}, indent=2))
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -490,7 +534,7 @@ def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:
 
     Ohne `publishers` wird ein einmaliger eigener gz-transport-Node
     aufgebaut (Standalone-Aufruf, z.B. aus main()). Mit `publishers`
-    (wie sie robot_gui.py/robot_program.py aufbauen) werden die
+    (wie sie launch_simulation()/robot_program.py aufbauen) werden die
     übergebenen Publisher wiederverwendet.
     """
     Double = import_gz("msgs", "double_pb2").Double
@@ -521,14 +565,63 @@ def send_to_safe_staging_pose(publishers: dict | None = None) -> None:
     time.sleep(1.0)  # Zeit, die Pose tatsächlich zu erreichen, bevor es weitergeht
 
 
-def send_look_at_table_pose() -> None:
+def send_look_at_table_pose(publishers: dict | None = None) -> None:
     """Fährt den Arm über gz-transport in die Blick-auf-Tisch-Pose.
 
     Setzt voraus, dass der Arm bereits bei SAFE_STAGING_POSE steht (siehe
     send_to_safe_staging_pose) - ein direkter Sprung aus der Null-Stellung
     würde mit dem Tisch kollidieren.
     """
-    send_joint_pose(LOOK_AT_TABLE_POSE)
+    send_joint_pose(LOOK_AT_TABLE_POSE, publishers)
+
+
+def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
+    """Baut URDF/SDF/Welt, startet gz-sim und die gz-transport-Publisher pro
+    Gelenk - der komplette Ablauf, der identisch in main() hier, in
+    robot_program.py und in gui/my_gui.py gebraucht wird. Sendet bewusst
+    noch KEINE Pose (der Roboter steht danach in der physikalischen
+    Null-Stellung) - Aufrufer entscheiden selbst, ob/wann sie z.B.
+    send_to_safe_staging_pose() hinterherschicken.
+
+    Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation()
+    verwenden.
+    """
+    for tool in ("gz", "ros2"):
+        check_tool(tool)
+    isolate_gz_partition()
+
+    WORK_DIR.mkdir(exist_ok=True)
+    urdf_path = WORK_DIR / f"{MODEL_NAME}.urdf"
+    world_path = WORK_DIR / "world.sdf"
+
+    write_mount_urdf(urdf_path)
+    append_joint_position_controllers(urdf_path)
+    robot_model_sdf = urdf_to_sdf_model(urdf_path)
+    world_path.write_text(build_world_sdf(robot_model_sdf))
+
+    gz_cmd = ["gz", "sim", "-r", str(world_path)]
+    if headless:
+        gz_cmd.insert(2, "-s")
+    gz_proc = subprocess.Popen(gz_cmd, env=gazebo_env_with_fr20_meshes())
+
+    wait_for_world(WORLD_NAME)
+    time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
+
+    Node = import_gz("transport").Node
+    Double = import_gz("msgs", "double_pb2").Double
+    node = Node()
+    publishers = {j: node.advertise(f"/{MODEL_NAME}/{j}/cmd_pos", Double) for j in JOINT_NAMES}
+    return gz_proc, publishers
+
+
+def shutdown_simulation(gz_proc: subprocess.Popen) -> None:
+    """Beendet einen mit launch_simulation() gestarteten gz-sim-Prozess sauber."""
+    if gz_proc.poll() is None:
+        gz_proc.terminate()
+        try:
+            gz_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            gz_proc.kill()
 
 
 # ---------------------------------------------------------------------------
@@ -540,41 +633,15 @@ def main() -> None:
     parser.add_argument("--headless", action="store_true", help="gz-sim ohne GUI starten")
     args = parser.parse_args()
 
-    for tool in ("gz", "ros2"):
-        check_tool(tool)
-
-    isolate_gz_partition()
-
-    WORK_DIR.mkdir(exist_ok=True)
-    urdf_path = WORK_DIR / f"{MODEL_NAME}.urdf"
-    world_path = WORK_DIR / "world.sdf"
-
-    print("Erzeuge URDF für den kopfüber montierten FR20 ...")
-    write_mount_urdf(urdf_path)
-    append_joint_position_controllers(urdf_path)
-
-    print("Konvertiere URDF zu SDF, damit der Roboter von Anfang an Teil der Welt ist ...")
-    robot_model_sdf = urdf_to_sdf_model(urdf_path)
-
-    print("Erzeuge SDF-Welt (Raum + Tisch + Roboter) ...")
-    world_path.write_text(build_world_sdf(robot_model_sdf))
-
-    gz_cmd = ["gz", "sim", "-r", str(world_path)]
-    if args.headless:
-        gz_cmd.insert(2, "-s")
     print("Starte Gazebo Jetty (gz-sim) ...")
-    gz_proc = subprocess.Popen(gz_cmd, env=gazebo_env_with_fr20_meshes())
+    gz_proc, publishers = launch_simulation(headless=args.headless)
 
     try:
-        wait_for_world(WORLD_NAME)
-        print("Warte, bis die Gelenk-Controller aktiv sind ...")
-        time.sleep(2.0)
-
         print("Fahre zunächst in die sichere Zwischenpose (Kollisionsvermeidung) ...")
-        send_to_safe_staging_pose()
+        send_to_safe_staging_pose(publishers)
 
         print("Fahre in die Blick-auf-Tisch-Pose ...")
-        send_look_at_table_pose()
+        send_look_at_table_pose(publishers)
 
         print(
             "\nFertig. Der FR20 hängt fix an der Decke und blickt mit "
@@ -585,12 +652,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nBeende Gazebo ...")
     finally:
-        if gz_proc.poll() is None:
-            gz_proc.terminate()
-            try:
-                gz_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                gz_proc.kill()
+        shutdown_simulation(gz_proc)
 
 
 if __name__ == "__main__":

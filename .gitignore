@@ -49,3 +49,7 @@ qtcreator-*
 
 # Catkin custom files
 CATKIN_IGNORE
+
+# Kalibrierter Tisch-Offset (siehe fr20_ceiling_gazebo.py) - physisch an
+# diesen einen Aufbau gebunden, gehört nicht ins Repo.
+/table_offset.json

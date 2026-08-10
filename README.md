@@ -31,21 +31,6 @@ https://github.com/FAIR-INNOVATION/frcobot_ros2), dem zur Laufzeit ein
 fixer Decken-Verankerungslink ("world") sowie ein "tool0"-Werkzeugframe
 angehängt werden.
 
-Für eine einfache manuelle Steuerung gibt es zusätzlich `robot_gui.py`:
-Es startet dieselbe Simulation und öffnet ein Fenster mit einem
-Schieberegler pro Gelenk (±180°) sowie Buttons für "Blick auf Tisch" und
-"Home". Zusätzlich lässt sich unten in der GUI eine Zielposition (X/Y/Z in
-Metern, Raumkoordinaten wie bei `TABLE_CENTER`) eingeben - "Fahre zu
-Position" berechnet per inverser Kinematik (`fr20_kinematics.py`, liest
-die tatsächliche Gelenkkette aus dem generierten URDF) die passenden
-Gelenkwinkel und fährt den Arm dorthin, mit nach unten gerichtetem
-Werkzeug.
-
-```
-source /opt/ros/jazzy/setup.bash
-python3 robot_gui.py
-```
-
 ## Punktprogramme abfahren
 
 `robot_program.py` fährt eine Liste von Punkten aus einer JSON-Datei
@@ -64,3 +49,24 @@ python3 robot_program.py                              # verfügbare Programme au
 python3 robot_program.py programs/beispiel_tisch.json
 python3 robot_program.py programs/beispiel_gelenkpose.json --loop
 ```
+
+## Nullpunkt kalibrieren (falls sich der Tisch verschoben hat)
+
+Alle `x`/`y`/`z`-Koordinaten in den Programmdateien sind fest relativ zur
+Deckenhalterung des Roboters gemeint, nicht relativ zum Tisch. Verrutscht
+der Tisch etwas, landen die Programmpunkte an der falschen Stelle - dafür
+gibt es die Nullpunkt-Kalibrierung:
+
+1. In der GUI ein beliebiges Programm starten und sofort "Pause" drücken
+   (button16) - das aktiviert die Jog-Buttons (X/Y/Z).
+2. Den Roboter per Jog exakt auf die Referenzstelle fahren: die vordere
+   linke Ecke der Tischplatte, auf Tischhöhe (siehe
+   `CALIBRATION_REFERENCE_XYZ` in `fr20_ceiling_gazebo.py` - dort auch
+   änderbar, falls eine andere Stelle besser geeignet ist).
+3. "Nullpunkt kalibrieren" (button22) drücken und bestätigen.
+
+Der neu berechnete Tisch-Offset wird in `table_offset.json` gespeichert
+(nicht Teil des Repos, siehe `.gitignore`) und ab sofort automatisch auf
+alle kartesischen Programmpunkte angewendet (`robot_program.run_program`).
+Gelenkpose-Punkte (`joints`) sind davon nicht betroffen, ebenso wenig die
+Jog-Buttons selbst.

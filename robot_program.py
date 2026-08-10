@@ -30,7 +30,7 @@ import json
 import math
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -240,6 +240,42 @@ def resolve_point(
     return candidates[0]
 
 
+def build_calibration_program() -> Program:
+    """Einzelnes Punktprogramm, das sim.CALIBRATION_REFERENCE_XYZ anfährt (den
+    markanten Kalibrierpunkt auf der Baugruppe, siehe Kommentar dort) - wird
+    vom GUI-Button "Nullpunkt kalibrieren" genutzt, um den Roboter automatisch
+    dorthin zu fahren, statt den kompletten Weg per Jog manuell zurücklegen zu
+    müssen. Von dort aus wird nur noch die Restabweichung feinjustiert, bevor
+    calibrate_table_offset() aufgerufen wird."""
+    return Program(
+        name="Kalibrierpunkt",
+        points=[Point(name="Kalibrierpunkt", xyz=sim.CALIBRATION_REFERENCE_XYZ, dwell_s=0.0)],
+    )
+
+
+def calibrate_table_offset(current_joints_rad: dict[str, float]) -> tuple[float, float, float]:
+    """Kalibriert den Tisch-Offset: Aufrufer muss den Roboter vorher (per
+    build_calibration_program automatisch angefahren, danach per Jog
+    feinjustiert) exakt auf sim.CALIBRATION_REFERENCE_XYZ gebracht haben
+    (siehe Kommentar dort - der markante Punkt auf der Baugruppe). Der Offset
+    ist die
+    Differenz zwischen der per Vorwärtskinematik berechneten tatsächlichen
+    Werkzeugposition und dieser bekannten Soll-Position - er wird sofort
+    gespeichert (sim.save_table_offset) und danach von allen kartesischen
+    Programmpunkten berücksichtigt (siehe _build_travel_waypoints).
+
+    Die Tischhöhe (Z) ändert sich nicht und muss daher nicht neu kalibriert
+    werden - dz bleibt immer 0, kalibriert wird nur die X/Y-Lage.
+
+    Gibt den neuen Offset (dx, dy, dz in m) zurück.
+    """
+    actual_xyz = kin.forward_kinematics(current_joints_rad)[:3, 3]
+    dx, dy, _dz = (a - r for a, r in zip(actual_xyz, sim.CALIBRATION_REFERENCE_XYZ))
+    offset = (dx, dy, 0.0)
+    sim.save_table_offset(*offset)
+    return offset
+
+
 # ---------------------------------------------------------------------------
 # Programm ausführen
 # ---------------------------------------------------------------------------
@@ -259,7 +295,11 @@ def _interruptible_sleep(seconds: float, stop_event: "threading.Event | None") -
         time.sleep(min(0.05, deadline - time.time()))
 
 
-def _build_travel_waypoints(point: Point, current_joints_rad: dict[str, float]) -> list[dict[str, float]]:
+def _build_travel_waypoints(
+    point: Point,
+    current_joints_rad: dict[str, float],
+    offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> list[dict[str, float]]:
     """Baut die Gelenkziele, die für einen Punkt tatsächlich gesendet werden.
 
     Bei kartesischen Zielen unterhalb von sim.SAFE_TRAVEL_Z wird zuerst auf
@@ -275,9 +315,19 @@ def _build_travel_waypoints(point: Point, current_joints_rad: dict[str, float]) 
 
     Bei Gelenkpose-Zielen (`joints`) oder wenn kaum seitliche Bewegung nötig
     ist, wird direkt zum Ziel gefahren wie bisher.
+
+    `offset_xyz` (siehe sim.load_table_offset()) wird - falls ungleich Null -
+    einmal auf den kartesischen Zielpunkt addiert, bevor irgendetwas anderes
+    berechnet wird: damit landen auch die Rückzug-/Verfahren-Zwischenschritte
+    schon an der korrigierten Position, statt am Ende noch einmal seitlich
+    nachzukorrigieren. Gelenkpose-Ziele sind davon unberührt (die sind nicht
+    tischrelativ gemeint).
     """
     if point.xyz is None:
         return [resolve_point(point, current_joints_rad)]
+
+    if offset_xyz != (0.0, 0.0, 0.0):
+        point = replace(point, xyz=tuple(p + o for p, o in zip(point.xyz, offset_xyz)))
 
     x, y, z = point.xyz
     if z >= sim.SAFE_TRAVEL_Z - 1e-6:
@@ -317,17 +367,28 @@ def _build_travel_waypoints(point: Point, current_joints_rad: dict[str, float]) 
     return [retract, travel, final]
 
 
+def _wait_while(event: "threading.Event | None", stop_event: "threading.Event | None") -> None:
+    """Blockiert, solange `event` gesetzt ist (z.B. eine Pause), kehrt aber
+    sofort zurück, sobald `stop_event` gesetzt wird."""
+    while event is not None and event.is_set() and not (stop_event is not None and stop_event.is_set()):
+        time.sleep(0.1)
+
+
 def run_program(
     program: Program,
     publishers: dict,
     loop: bool = False,
     stop_event: "threading.Event | None" = None,
+    pause_event: "threading.Event | None" = None,
+    current: dict[str, float] | None = None,
+    get_current=None,
+    on_target_sent=None,
 ) -> dict[str, float]:
     """Fährt alle Punkte eines Programms nacheinander an.
 
     `publishers` sind gz-transport-Publisher pro Gelenk, wie sie
-    fr20_ceiling_gazebo.send_look_at_table_pose() bzw. robot_gui.py sie
-    aufbauen (ein Double-Topic pro Gelenkname aus sim.JOINT_NAMES).
+    fr20_ceiling_gazebo.launch_simulation() aufbaut (ein Double-Topic pro
+    Gelenkname aus sim.JOINT_NAMES).
 
     Ist `stop_event` gesetzt (z.B. threading.Event), wird nach dem aktuellen
     Punkt abgebrochen, sobald das Event gesetzt wird - damit sich zwei
@@ -335,19 +396,35 @@ def run_program(
     gui/my_gui.py: ein Button-Klick während ein anderes Programm läuft
     bricht es ab und fährt stattdessen sofort die neue Route).
 
-    Gibt die zuletzt gesendete Gelenkpose zurück, damit ein Aufrufer (z.B.
-    die GUI für die Jog-Buttons) weiß, von wo aus als nächstes weitergefahren
-    werden kann.
+    Ist `pause_event` gesetzt, wird vor jedem Zwischenschritt gewartet,
+    solange es gesetzt bleibt (siehe gui/my_gui.py: Pause/Weiter-Buttons) -
+    anders als stop_event bricht das nicht ab, sondern hält nur an.
+
+    `current` ist die als bekannt angenommene Startpose - Default
+    SAFE_STAGING_POSE (siehe unten), da gz-sim den Roboter physikalisch
+    immer in der Null-Stellung spawnt und jeder Aufrufer vor dem ersten
+    Zielpunkt zunächst dorthin fährt (send_to_safe_staging_pose).
+
+    `get_current` (optional) wird vor jedem Punkt aufgerufen, um `current`
+    aufzufrischen - Hook für einen Aufrufer mit eigenem, von außen
+    veränderlichem Positions-Zustand (z.B. gui/my_gui.py: wird während
+    einer Pause gejoggt, macht das Programm beim Fortsetzen genau dort
+    weiter, wo der Jog den Arm hingefahren hat, statt die alte Position
+    vor der Pause anzunehmen).
+
+    `on_target_sent` (optional) wird nach jedem gesendeten Zwischenschritt
+    mit der neuen Pose aufgerufen - Hook für einen Aufrufer, der den
+    Fortschritt zusätzlich selbst mitverfolgen will (z.B. die GUI, um
+    self._current_joints synchron zu halten).
+
+    Gibt die zuletzt gesendete Gelenkpose zurück.
     """
     Double = sim.import_gz("msgs", "double_pb2").Double
-
-    # SAFE_STAGING_POSE als Annahme für die aktuelle Pose: gz-sim spawnt den
-    # Roboter physikalisch immer in der Null-Stellung, und jeder Aufrufer
-    # (fr20_ceiling_gazebo.main(), robot_gui.py, gui/my_gui.py) fährt vor dem
-    # ersten Programm/Zielpunkt zunächst dorthin (siehe SAFE_STAGING_POSE in
-    # fr20_ceiling_gazebo.py) - ein direkter Sprung Null -> Zielpunkt würde
-    # mitten durch den Tisch schwingen.
-    current = dict(sim.SAFE_STAGING_POSE)
+    if current is None:
+        current = dict(sim.SAFE_STAGING_POSE)
+    offset_xyz = sim.load_table_offset()
+    if offset_xyz != (0.0, 0.0, 0.0):
+        print(f"Tisch-Offset aktiv: dx={offset_xyz[0]:+.4f} dy={offset_xyz[1]:+.4f} dz={offset_xyz[2]:+.4f} m")
 
     def send(joint_angles: dict[str, float]) -> None:
         for joint, angle in joint_angles.items():
@@ -355,19 +432,31 @@ def run_program(
             msg.data = angle
             publishers[joint].publish(msg)
 
+    def stopped() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
     while True:
         for point in program.points:
-            if stop_event is not None and stop_event.is_set():
+            _wait_while(pause_event, stop_event)
+            if stopped():
                 print("Programm abgebrochen.")
-                return
+                return current
+            if get_current is not None:
+                current = get_current()
             print(f"-> Punkt '{point.name}'")
-            waypoints = _build_travel_waypoints(point, current)
+            waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
             for i, target in enumerate(waypoints):
+                _wait_while(pause_event, stop_event)
+                if stopped():
+                    print("Programm abgebrochen.")
+                    return current
                 send(target)
                 current = target
+                if on_target_sent is not None:
+                    on_target_sent(current)
                 is_last = i == len(waypoints) - 1
                 _interruptible_sleep(point.dwell_s if is_last else 0.8, stop_event)
-        if not loop or (stop_event is not None and stop_event.is_set()):
+        if not loop or stopped():
             break
         print("Programm-Ende erreicht, starte erneut (--loop) ...")
 
@@ -392,12 +481,16 @@ def dry_run_program(program: Program) -> bool:
     urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
     sim.write_mount_urdf(urdf_path)
 
-    print(f"[Dry-Run] Löse '{program.name}' auf, ausgehend von SAFE_STAGING_POSE (keine Simulation):\n")
+    offset_xyz = sim.load_table_offset()
+    print(f"[Dry-Run] Löse '{program.name}' auf, ausgehend von SAFE_STAGING_POSE (keine Simulation):")
+    if offset_xyz != (0.0, 0.0, 0.0):
+        print(f"  Tisch-Offset aktiv: dx={offset_xyz[0]:+.4f} dy={offset_xyz[1]:+.4f} dz={offset_xyz[2]:+.4f} m")
+    print()
     current = dict(sim.SAFE_STAGING_POSE)
     all_ok = True
     for point in program.points:
         try:
-            waypoints = _build_travel_waypoints(point, current)
+            waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
         except (ValueError, RuntimeError) as exc:
             print(f"  FEHLER bei '{point.name}': {exc}")
             all_ok = False
@@ -457,43 +550,12 @@ def main() -> None:
         ok = dry_run_program(program)
         raise SystemExit(0 if ok else 1)
 
-    for tool in ("gz", "ros2"):
-        sim.check_tool(tool)
-
-    sim.isolate_gz_partition()
-
-    sim.WORK_DIR.mkdir(exist_ok=True)
-    urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-    world_path = sim.WORK_DIR / "world.sdf"
-
-    print("Erzeuge URDF für den kopfüber montierten FR20 ...")
-    sim.write_mount_urdf(urdf_path)
-    sim.append_joint_position_controllers(urdf_path)
-
-    print("Konvertiere URDF zu SDF ...")
-    robot_model_sdf = sim.urdf_to_sdf_model(urdf_path)
-
-    print("Erzeuge SDF-Welt ...")
-    world_path.write_text(sim.build_world_sdf(robot_model_sdf))
-
-    gz_cmd = ["gz", "sim", "-r", str(world_path)]
-    if args.headless:
-        gz_cmd.insert(2, "-s")
     print("Starte Gazebo Jetty (gz-sim) ...")
-    import subprocess
-
-    gz_proc = subprocess.Popen(gz_cmd, env=sim.gazebo_env_with_fr20_meshes())
+    gz_proc, publishers = sim.launch_simulation(headless=args.headless)
 
     try:
-        sim.wait_for_world(sim.WORLD_NAME)
-        print("Warte, bis die Gelenk-Controller aktiv sind ...")
-        time.sleep(2.0)
-
-        Node = sim.import_gz("transport").Node
-        Double = sim.import_gz("msgs", "double_pb2").Double
-
-        node = Node()
-        publishers = {j: node.advertise(f"/{sim.MODEL_NAME}/{j}/cmd_pos", Double) for j in sim.JOINT_NAMES}
+        print("Fahre zunächst in die sichere Zwischenpose (Kollisionsvermeidung) ...")
+        sim.send_to_safe_staging_pose(publishers)
 
         run_program(program, publishers, loop=args.loop)
 
@@ -502,12 +564,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nBeende Gazebo ...")
     finally:
-        if gz_proc.poll() is None:
-            gz_proc.terminate()
-            try:
-                gz_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                gz_proc.kill()
+        sim.shutdown_simulation(gz_proc)
 
 
 if __name__ == "__main__":
