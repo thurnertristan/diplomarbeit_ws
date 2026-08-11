@@ -21,7 +21,7 @@ import fr20_ceiling_gazebo as sim  # noqa: E402  (Import erst nach sys.path-Anpa
 import fr20_kinematics as kin  # noqa: E402
 import robot_program as rp  # noqa: E402
 
-PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_drehung.json"
+PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_gelenkpose.json"
 PROGRAM_TISCH = REPO_ROOT / "programs" / "beispiel_tisch.json"
 PROGRAM_FIGUR1 = REPO_ROOT / "programs" / "beispiel_figur1.json"
 
@@ -120,7 +120,7 @@ class MyApp:
         colored_button("Success.TButton", "#2f9e57", "#22803f")   # Weiter
         colored_button("Warning.TButton", "#d98c00", "#b57400")   # Pause
         colored_button("Danger.TButton", "#d9453f", "#b7332e")    # Beenden/Abbruch
-        colored_button("Jog.TButton", "#586470", "#414a54")       # X/Y-Jog
+        colored_button("Jog.TButton", "#586470", "#414a54")       # X/Y/Z-Jog
 
     def _style_widget(self, widget_id: str, style_name: str | None = None, text: str | None = None) -> None:
         """Setzt Style und/oder Text eines schon gebauten Widgets - kleiner
@@ -130,12 +130,6 @@ class MyApp:
             widget.configure(style=style_name)
         if text is not None:
             widget.configure(text=text)
-
-
-
-
-    def on_btpressed(self):
-        print("Button wurde geklickt!")
 
     def _ensure_simulation_running(self) -> dict:
         """Startet die Gazebo-Simulation einmalig (siehe run(): passiert bereits
@@ -161,11 +155,7 @@ class MyApp:
                 # mit dem kaputten Rest weiterzumachen: alten Prozess sauber
                 # beenden und neu aufsetzen.
                 print("Vorheriger Gazebo-Start war unvollständig, versuche es erneut ...")
-                self._gz_proc.terminate()
-                try:
-                    self._gz_proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    self._gz_proc.kill()
+                sim.shutdown_simulation(self._gz_proc)
                 self._gz_proc = None
                 self._publishers = None
 
@@ -183,6 +173,22 @@ class MyApp:
 
             print("Gazebo bereit.")
             return self._publishers
+
+    def _stop_running_program(self) -> bool:
+        """Bricht ein evtl. gerade laufendes Punktprogramm ab und wartet,
+        bis der Worker-Thread beendet ist - der gemeinsame Kern hinter
+        on_abbruch_pressed, on_kalibrierung_weiter_pressed, on_close und dem
+        Ablöse-Schritt in _run_program_async. Hebt eine evtl. aktive Pause
+        zuerst auf, damit run_program() nicht dort auf das gleich folgende
+        stop_event wartet, statt sofort abzubrechen (siehe _wait_while in
+        robot_program.py). Gibt True zurück, wenn tatsächlich ein Programm
+        lief und gestoppt wurde - False, wenn ohnehin nichts lief."""
+        if self._program_thread is None or not self._program_thread.is_alive():
+            return False
+        self._pause_event.clear()
+        self._stop_event.set()
+        self._program_thread.join(timeout=5.0)
+        return True
 
     def _run_program_async(self, program_source: "pathlib.Path | rp.Program", on_done=None) -> None:
         """Startet ein Punktprogramm (siehe robot_program.py) in einem eigenen
@@ -210,9 +216,7 @@ class MyApp:
         umgeleitet (Tkinter-Widgets dürfen nicht direkt aus einem anderen
         Thread angefasst werden).
         """
-        if self._program_thread is not None and self._program_thread.is_alive():
-            self._stop_event.set()
-            self._program_thread.join(timeout=5.0)
+        self._stop_running_program()
 
         stop_event = threading.Event()
         self._stop_event = stop_event
@@ -379,15 +383,10 @@ class MyApp:
     def on_abbruch_pressed(self):
         """Button 'Abbruch' (button19): bricht ein laufendes Punktprogramm
         sofort und endgültig ab (nicht nur pausieren) - Gazebo und die GUI
-        bleiben dabei offen. Hebt eine evtl. aktive Pause zuerst auf, damit
-        run_program() nicht auf das gleich folgende stop_event wartet,
-        statt sofort abzubrechen."""
-        if self._program_thread is None or not self._program_thread.is_alive():
+        bleiben dabei offen."""
+        if not self._stop_running_program():
             print("Kein Programm läuft gerade - Abbruch hat nichts zu tun.")
             return
-        self._pause_event.clear()
-        self._stop_event.set()
-        self._program_thread.join(timeout=5.0)
         print("Programm abgebrochen.")
 
     def _open_calibration_window(self):
@@ -433,7 +432,15 @@ class MyApp:
         Programm-Buttons. Vor dem allerersten Aufruf dieses Buttons ist das
         Hauptfenster nicht erreichbar (siehe run()), es kann also kein
         Programm gestartet werden, bevor der Nutzer diese Kalibrierung
-        gesehen/bestätigt hat."""
+        gesehen/bestätigt hat.
+
+        Bricht zuerst eine noch laufende automatische Kalibrierfahrt ab
+        (siehe on_kalibrieren_pressed/_run_program_async), falls "Weiter"
+        geklickt wird, bevor der Roboter den Kalibrierpunkt erreicht hat -
+        sonst würde die Fahrt im Hintergrund weiterlaufen und
+        _confirm_and_calibrate später unerwartet über dem schon sichtbaren
+        Hauptfenster aufpoppen, statt gar nicht mehr zu erscheinen."""
+        self._stop_running_program()
         self._release_jog()
         self.window4.withdraw()
         self.mainwindow.deiconify()
@@ -551,16 +558,9 @@ class MyApp:
 
     def on_close(self):
         self._release_jog()
-        if self._stop_event is not None:
-            self._stop_event.set()
-        if self._program_thread is not None and self._program_thread.is_alive():
-            self._program_thread.join(timeout=5.0)
-        if self._gz_proc is not None and self._gz_proc.poll() is None:
-            self._gz_proc.terminate()
-            try:
-                self._gz_proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self._gz_proc.kill()
+        self._stop_running_program()
+        if self._gz_proc is not None:
+            sim.shutdown_simulation(self._gz_proc)
         self.mainwindow.destroy()
 
     def run(self):

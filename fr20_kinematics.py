@@ -99,18 +99,40 @@ class UrdfChain:
         return t
 
 
-def _load_chain() -> UrdfChain:
-    urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-    if not urdf_path.exists():
-        raise FileNotFoundError(
-            f"{urdf_path} nicht gefunden - das URDF wird beim Start der Simulation erzeugt."
-        )
-    return UrdfChain(urdf_path)
+_chain_cache: UrdfChain | None = None
+
+
+def load_chain() -> UrdfChain:
+    """Lädt (und cached) die Gelenkkette aus dem generierten URDF.
+
+    Öffentlich (kein führender Unterstrich), weil auch robot_program.py sie
+    direkt braucht (siehe _is_transition_safe, das für die Tisch-
+    Kollisionsprüfung selbst durch die Kette läuft statt forward_kinematics()
+    zu nutzen - dafür reicht die Endpose allein nicht).
+
+    Die Kette ändert sich innerhalb eines Laufs nicht (feste Modellstruktur,
+    nur die Gelenkwinkel selbst variieren) - ein erneutes Parsen der
+    URDF-Datei bei jedem IK-/FK-Aufruf wäre reine Verschwendung:
+    resolve_point() in robot_program.py kann pro Punkt bis zu ~9 IK-Aufrufe
+    auslösen (primärer Versuch + Fallback-Kandidaten), jeder davon rief
+    früher hier erneut ET.parse() auf dieselbe Datei auf. Fehlt die Datei
+    noch (z.B. bevor überhaupt eine Simulation gestartet wurde), wird sie
+    einmalig erzeugt statt einen Fehler zu werfen - das deckt auch
+    Kollisionsprüfungen ab, die schon vor dem ersten launch_simulation()
+    laufen (siehe robot_program._is_transition_safe)."""
+    global _chain_cache
+    if _chain_cache is None:
+        urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
+        if not urdf_path.exists():
+            sim.WORK_DIR.mkdir(exist_ok=True)
+            sim.write_mount_urdf(urdf_path)
+        _chain_cache = UrdfChain(urdf_path)
+    return _chain_cache
 
 
 def forward_kinematics(joint_angles: dict) -> np.ndarray:
     """Pose von tool0 im Weltkoordinatensystem für gegebene Gelenkwinkel (rad)."""
-    return _load_chain().forward_kinematics(joint_angles)
+    return load_chain().forward_kinematics(joint_angles)
 
 
 def _pose_error(current: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -145,7 +167,7 @@ def inverse_kinematics(
     der Arm möglichst nah an der aktuellen Konfiguration bleiben soll, ist das
     das gewünschte Verhalten.
     """
-    chain = _load_chain()
+    chain = load_chain()
     names = chain.movable_joint_names
     angles = np.array([seed[j] for j in names], dtype=float)
     damping = 0.05

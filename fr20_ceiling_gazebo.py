@@ -216,6 +216,64 @@ JOINT_GAINS = {
     "j6": (400, 0, 20),
 }
 
+# Rohr-Rotationsachse (Motor + Getriebe, dreht das eingespannte Rohr
+# zwischen zwei Biegungen weiter - siehe tube_rotation.py). Bewusst ein
+# einfacher Platzhalter (Ständer + drehbare Welle) statt eines Nachbaus der
+# realen Baugruppe: es geht hier nur um die Kinematik/den Zeitablauf der
+# Achse im Zusammenspiel mit dem FR20-Arm (siehe build_tube_rotation_model_sdf),
+# nicht um eine mechanische Nachbildung des Biegekopfs.
+TUBE_ROTATION_MODEL_NAME = "tube_rotation_axis"
+TUBE_ROTATION_JOINT_NAME = "rotate"
+
+# Platzhalter-Werte, bis ein realer Motor/Getriebe feststeht - effort ist
+# das max. Ausgangsdrehmoment der Achse (Motor-Drehmoment * Übersetzung *
+# Wirkungsgrad, siehe biegekraft_rechner.py), velocity die max.
+# Winkelgeschwindigkeit der Achse. Einfach hier anpassen, sobald ein
+# konkreter Motor gewählt ist.
+TUBE_ROTATION_EFFORT_NM = 150.0
+TUBE_ROTATION_VELOCITY_RAD_S = 1.0
+
+# TUBE_ROTATION_INERTIA_YY_KGM2 ist die angenommene Trägheit der Welle um
+# ihre eigene (Y-)Achse - siehe build_tube_rotation_model_sdf(). Bewusst
+# deutlich höher als eine dünne Platzhalter-Welle physisch hätte: bei den
+# ersten Tests mit einer sehr leichten Welle (0.002 kg*m^2) hat der
+# Regler das Gelenk innerhalb weniger Schritte in den effort-Anschlag
+# (150 Nm) gefahren - bei so kleiner Trägheit bedeutet das eine
+# Winkelbeschleunigung von >70000 rad/s^2, die GAINS unten in eine
+# aufschaukelnde Schwingung statt einer sauberen Annäherung trieb (per
+# gz-topic-Messung an /world/.../pose/info nachgewiesen: der Winkel schoss
+# über 90° hinaus bis über 200° und zurück, statt sich einzupendeln).
+# 0.05 kg*m^2 entspricht ungefähr einem realen Spannfutter+Welle+Getriebe
+# und hält die nötigen Drehmomente bei GAINS unten weit unter dem
+# effort-Limit (siehe Rechnung: p_gain * pi rad ≈ 5.7 Nm << 150 Nm) -
+# dadurch bleibt der Regler im linearen, gut gedämpften Bereich.
+TUBE_ROTATION_INERTIA_YY_KGM2 = 0.05
+TUBE_ROTATION_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für TUBE_ROTATION_INERTIA_YY_KGM2
+
+# Länge der Platzhalter-Welle (siehe build_tube_rotation_model_sdf) - eigene
+# Konstante, damit die Positionierung unten die Welle nachweislich mit
+# Abstand am Tisch vorbeiführt statt sie hineinzubauen (siehe
+# TUBE_ROTATION_XY/Z-Kommentar).
+TUBE_ROTATION_SHAFT_LENGTH_M = 0.4
+
+# Position der Achse: neben dem Tisch, am Ende der Baugruppe entlang ihrer
+# langen Achse (Y-Richtung, siehe ASSEMBLY_SIZE_XY_M) - dort, wo ein
+# Spannfutter das Rohr fassen und drehen würde. Der Y-Abstand zur Tischkante
+# ist bewusst größer als TUBE_ROTATION_SHAFT_LENGTH_M: eine erste Version
+# mit nur 0.1 m Abstand ließ die Welle ins Kollisionsvolumen des Tisches
+# hineinragen (Welle und Tisch überlappten sich bei gleicher Höhe) - die
+# Physik-Engine erzeugte dadurch bei jedem Zeitschritt Kontaktkräfte, die
+# das Gelenk unkontrolliert durchdrehen ließen (per gz-topic-Messung an
+# /world/.../pose/info nachgewiesen: der Winkel sprang chaotisch zwischen
+# -94° und 208°, statt sich auf das Zielgelenk einzupendeln - keine
+# Regler-Instabilität, sondern eine echte Kollision). Z liegt etwas über
+# TABLE_TOP_Z aus demselben Grund (keine Überlappung mit der Tischplatte).
+TUBE_ROTATION_XY = (
+    TABLE_CENTER[0],
+    TABLE_CENTER[1] - TABLE_SIZE_XY[1] / 2 - TUBE_ROTATION_SHAFT_LENGTH_M - 0.1,
+)
+TUBE_ROTATION_Z = TABLE_TOP_Z + 0.05
+
 WORK_DIR = Path(__file__).resolve().parent / "gazebo_fr20_ceiling_generated"
 
 
@@ -369,6 +427,86 @@ def urdf_to_sdf_model(urdf_path: Path) -> str:
     return sdf_text[start:end]
 
 
+def build_tube_rotation_model_sdf() -> str:
+    """SDF-Modell für die Rohr-Rotationsachse (siehe TUBE_ROTATION_*-Konstanten
+    oben und tube_rotation.py): ein Ständer (fix mit der Welt verbunden) und
+    eine drehbare Welle, mit JointPositionController-Plugin genau wie bei
+    den FR20-Armgelenken (append_joint_position_controllers) - ansteuerbar
+    über /{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos.
+
+    Bewusst ein Platzhalter (kein Nachbau der realen Baugruppe/des
+    Spannfutters) - für Kinematik/Zeitablauf im Zusammenspiel mit dem
+    FR20-Arm reicht das; sobald Mechanik und Motor feststehen, Geometrie
+    und TUBE_ROTATION_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
+
+    Die Welle rotiert um die Y-Achse (lange Achse der Baugruppe, siehe
+    ASSEMBLY_SIZE_XY_M) - Link-Posen bleiben dafür unrotiert (achsparallel
+    zum Modell-Rahmen), nur die Visual-/Kollisionsgeometrie der Welle wird
+    für die Darstellung um 90° gekippt. Das hält den Gelenk-Achsvektor
+    (0 1 0) und das Trägheitsmoment im selben, unrotierten Bezugsrahmen -
+    ohne zusätzliche Koordinatentransformationen.
+    """
+    stand_height = TUBE_ROTATION_Z
+    shaft_length = TUBE_ROTATION_SHAFT_LENGTH_M
+    shaft_radius = 0.02
+    shaft_mass = 5.0  # siehe TUBE_ROTATION_INERTIA_YY_KGM2 für die Begründung
+    p, i, d = TUBE_ROTATION_GAINS
+
+    return f"""
+    <model name="{TUBE_ROTATION_MODEL_NAME}">
+      <pose>{TUBE_ROTATION_XY[0]} {TUBE_ROTATION_XY[1]} 0 0 0 0</pose>
+      <link name="stand">
+        <pose>0 0 {stand_height / 2} 0 0 0</pose>
+        <collision name="collision"><geometry><box><size>0.1 0.1 {stand_height}</size></box></geometry></collision>
+        <visual name="visual">
+          <geometry><box><size>0.1 0.1 {stand_height}</size></box></geometry>
+          <material><ambient>0.3 0.3 0.32 1</ambient><diffuse>0.3 0.3 0.32 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="shaft">
+        <pose>0 {shaft_length / 2} {stand_height} 0 0 0</pose>
+        <inertial>
+          <mass>{shaft_mass}</mass>
+          <inertia>
+            <ixx>0.1</ixx>
+            <iyy>{TUBE_ROTATION_INERTIA_YY_KGM2}</iyy>
+            <izz>0.1</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <pose>0 0 0 1.5708 0 0</pose>
+          <geometry><cylinder><radius>{shaft_radius}</radius><length>{shaft_length}</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <pose>0 0 0 1.5708 0 0</pose>
+          <geometry><cylinder><radius>{shaft_radius}</radius><length>{shaft_length}</length></cylinder></geometry>
+          <material><ambient>0.8 0.6 0.1 1</ambient><diffuse>0.8 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+      <joint name="stand_fixed" type="fixed">
+        <parent>world</parent>
+        <child>stand</child>
+      </joint>
+      <joint name="{TUBE_ROTATION_JOINT_NAME}" type="revolute">
+        <parent>stand</parent>
+        <child>shaft</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><effort>{TUBE_ROTATION_EFFORT_NM}</effort><velocity>{TUBE_ROTATION_VELOCITY_RAD_S}</velocity></limit>
+        </axis>
+      </joint>
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <joint_name>{TUBE_ROTATION_JOINT_NAME}</joint_name>
+        <topic>/{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos</topic>
+        <p_gain>{p}</p_gain>
+        <i_gain>{i}</i_gain>
+        <d_gain>{d}</d_gain>
+      </plugin>
+    </model>"""
+
+
 def build_world_sdf(robot_model_sdf: str) -> str:
     """SDF-Welt: Boden, vier Wände, Deckenplatte, Tisch mit Baugruppe und der Roboter."""
     half = ROOM_SIZE_XY / 2
@@ -500,6 +638,8 @@ def build_world_sdf(robot_model_sdf: str) -> str:
       </link>
     </model>
 
+{build_tube_rotation_model_sdf()}
+
 {robot_model_sdf}
   </world>
 </sdf>
@@ -583,6 +723,11 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     Null-Stellung) - Aufrufer entscheiden selbst, ob/wann sie z.B.
     send_to_safe_staging_pose() hinterherschicken.
 
+    `publishers` enthält neben den FR20-Armgelenken (j1..j6) auch einen
+    Eintrag "tube_rotation" für die Rohr-Rotationsachse (siehe
+    build_tube_rotation_model_sdf/tube_rotation.py) - vom Aufrufer genauso
+    per Double-Nachricht ansteuerbar wie die Armgelenke.
+
     Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation()
     verwenden.
     """
@@ -611,6 +756,9 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     Double = import_gz("msgs", "double_pb2").Double
     node = Node()
     publishers = {j: node.advertise(f"/{MODEL_NAME}/{j}/cmd_pos", Double) for j in JOINT_NAMES}
+    publishers["tube_rotation"] = node.advertise(
+        f"/{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos", Double
+    )
     return gz_proc, publishers
 
 

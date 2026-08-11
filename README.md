@@ -1,24 +1,10 @@
 # diplomarbeit_ws
 Programmierung des Roboters
 
-## Beispiel für die Steuerung
-
-In diesem Workspace befindet sich eine kleine Python-Basis für die Robotersteuerung.
-
-### Ausführung
-
-- `python3 robot_control.py move 1.5`
-- `python3 robot_control.py turn 90`
-- `python3 robot_control.py stop`
-- `python3 robot_control.py status`
-
 ## Programm start befehl
 source /opt/ros/jazzy/setup.bash
 source gui/venv/bin/activate
 python3 gui/my_gui.py
-
-Die Steuerung ist als leicht erweiterbares Beispiel gedacht und kann später
-an echte Hardware-Interfaces oder eine Simulation angepasst werden.
 
 ## Fairino FR20-Simulation und GUI-Steuerung
 
@@ -50,23 +36,49 @@ python3 robot_program.py programs/beispiel_tisch.json
 python3 robot_program.py programs/beispiel_gelenkpose.json --loop
 ```
 
-## Nullpunkt kalibrieren (falls sich der Tisch verschoben hat)
+## Nullpunkt kalibrieren (falls sich der Tisch/die Baugruppe verschoben hat)
 
 Alle `x`/`y`/`z`-Koordinaten in den Programmdateien sind fest relativ zur
 Deckenhalterung des Roboters gemeint, nicht relativ zum Tisch. Verrutscht
 der Tisch etwas, landen die Programmpunkte an der falschen Stelle - dafür
 gibt es die Nullpunkt-Kalibrierung:
 
-1. In der GUI ein beliebiges Programm starten und sofort "Pause" drücken
-   (button16) - das aktiviert die Jog-Buttons (X/Y/Z).
-2. Den Roboter per Jog exakt auf die Referenzstelle fahren: die vordere
-   linke Ecke der Tischplatte, auf Tischhöhe (siehe
-   `CALIBRATION_REFERENCE_XYZ` in `fr20_ceiling_gazebo.py` - dort auch
-   änderbar, falls eine andere Stelle besser geeignet ist).
-3. "Nullpunkt kalibrieren" (button22) drücken und bestätigen.
+1. Die GUI zeigt das Kalibrierungs-Fenster automatisch beim Start (bevor
+   das Hauptfenster mit den Programm-Buttons erscheint) - später ist es
+   über den Button "Kalibrierung" im Hauptfenster jederzeit erneut
+   erreichbar, falls sich der Tisch nochmal verschiebt.
+2. "Nullpunkt kalibrieren" drücken - der Roboter fährt automatisch auf den
+   markanten Referenzpunkt auf der Baugruppe (`CALIBRATION_REFERENCE_XYZ`
+   in `fr20_ceiling_gazebo.py` - dort auch änderbar, falls eine andere
+   Stelle besser geeignet ist).
+3. Im Bestätigungsdialog per Jog (X/Y/Z) feinjustieren, falls die Baugruppe
+   nicht exakt an der erwarteten Stelle steht, dann bestätigen.
+4. "Weiter" führt (mit oder ohne vorheriges Kalibrieren) zum Hauptfenster.
 
 Der neu berechnete Tisch-Offset wird in `table_offset.json` gespeichert
 (nicht Teil des Repos, siehe `.gitignore`) und ab sofort automatisch auf
 alle kartesischen Programmpunkte angewendet (`robot_program.run_program`).
 Gelenkpose-Punkte (`joints`) sind davon nicht betroffen, ebenso wenig die
 Jog-Buttons selbst.
+
+## Rohr-Rotationsachse und Biegekraft-Abschätzung
+
+`tube_rotation.py` steuert den Motor an, der das eingespannte Rohr
+zwischen zwei Biegungen um einen Drehwinkel weiterdreht - die Hardware
+steht noch nicht fest, deshalb ist die Ansteuerung von der Kommunikation
+mit dem Motor getrennt (austauschbares "Backend"):
+
+```
+python3 tube_rotation.py 45 --simulate            # nur loggen, ohne Hardware
+python3 tube_rotation.py 45 --gazebo --headless   # in der Simulation drehen
+python3 tube_rotation.py 45 --port /dev/ttyUSB0   # echter Schrittmotor an einem Mikrocontroller
+```
+
+`biegekraft_rechner.py` schätzt aus Rohr-Außendurchmesser, Wandstärke und
+Werkstoff das nötige Biegemoment und daraus (mit Getriebeübersetzung,
+Wirkungsgrad, Sicherheitsfaktor) das nötige Motor-Drehmoment ab - als
+Startpunkt für die Motor-/Getriebeauswahl, keine FEM-Simulation:
+
+```
+python3 biegekraft_rechner.py --od 20 --wall 1.5 --material S235 --gear-ratio 50
+```

@@ -18,7 +18,7 @@ anlegen und über --program auswählen.
 Start (Beispiel):
     source /opt/ros/jazzy/setup.bash
     python3 robot_program.py programs/beispiel_tisch.json
-    python3 robot_program.py programs/beispiel_wave.json --loop
+    python3 robot_program.py programs/beispiel_gelenkpose.json --loop
 
 Voraussetzungen: siehe Docstring von fr20_ceiling_gazebo.py.
 """
@@ -121,22 +121,6 @@ def _rpy_deg_to_matrix(rpy_deg: tuple[float, float, float]) -> np.ndarray:
 _FALLBACK_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5)
 _FALLBACK_ELBOWS = ((-1.5, -2.2, -1.2), (-1.5, 2.2, -1.2), (-0.5, -2.6, -1.5), (-0.5, 2.6, -1.5))
 
-_urdf_chain_cache: "kin.UrdfChain | None" = None
-
-
-def _get_chain() -> "kin.UrdfChain":
-    """Lädt die Gelenkkette einmalig aus dem generierten URDF (für die
-    Tisch-Kollisionsprüfung in resolve_point, siehe _is_transition_safe)."""
-    global _urdf_chain_cache
-    if _urdf_chain_cache is None:
-        sim.WORK_DIR.mkdir(exist_ok=True)
-        urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-        if not urdf_path.exists():
-            sim.write_mount_urdf(urdf_path)
-        _urdf_chain_cache = kin.UrdfChain(urdf_path)
-    return _urdf_chain_cache
-
-
 _TABLE_CHECK_MARGIN_M = 0.05
 
 
@@ -158,7 +142,7 @@ def _is_transition_safe(a: dict[str, float], b: dict[str, float], steps: int = 1
     resolve_point - zwei für sich sichere Posen können trotzdem über einen
     unsicheren Zwischenweg verbunden sein, wenn sich dabei die
     Ellbogen-Konfiguration stark ändert."""
-    chain = _get_chain()
+    chain = kin.load_chain()
     for frac in np.linspace(0, 1, steps):
         inter = {j: a[j] * (1 - frac) + b[j] * frac for j in sim.JOINT_NAMES}
         t = np.eye(4)
