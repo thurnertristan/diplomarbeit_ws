@@ -62,6 +62,7 @@ class Point:
 
     @staticmethod
     def from_dict(d: dict) -> "Point":
+        # baut einen Point aus einem JSON-Eintrag
         joints_deg = d.get("joints")
         xyz = d.get("xyz") or (
             (d["x"], d["y"], d["z"]) if all(k in d for k in ("x", "y", "z")) else None
@@ -85,6 +86,7 @@ class Program:
 
     @staticmethod
     def from_file(path: Path) -> "Program":
+        # lädt eine JSON-Programmdatei und wandelt jeden Punkt um
         data = json.loads(path.read_text())
         points = [Point.from_dict(p) for p in data["points"]]
         return Program(name=data.get("name", path.stem), points=points)
@@ -107,6 +109,7 @@ _DEFAULT_TOOL_R = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]], dtype=float)
 
 
 def _rpy_deg_to_matrix(rpy_deg: tuple[float, float, float]) -> np.ndarray:
+    # Grad -> Radiant, dann zur Rotationsmatrix
     r, p, y = (math.radians(v) for v in rpy_deg)
     return kin._rpy_to_matrix(r, p, y)
 
@@ -125,6 +128,7 @@ _TABLE_CHECK_MARGIN_M = 0.05
 
 
 def _pose_hits_table(position: np.ndarray) -> bool:
+    # true, wenn der Punkt über der Tischfläche und unter der Tischplatte liegt
     hx, hy = sim.TABLE_SIZE_XY[0] / 2, sim.TABLE_SIZE_XY[1] / 2
     tx, ty = sim.TABLE_CENTER
     x, y, z = position
@@ -143,6 +147,7 @@ def _is_transition_safe(a: dict[str, float], b: dict[str, float], steps: int = 1
     unsicheren Zwischenweg verbunden sein, wenn sich dabei die
     Ellbogen-Konfiguration stark ändert."""
     chain = kin.load_chain()
+    # Pose a nach b in kleinen Schritten interpolieren und jeden Zwischenschritt prüfen
     for frac in np.linspace(0, 1, steps):
         inter = {j: a[j] * (1 - frac) + b[j] * frac for j in sim.JOINT_NAMES}
         t = np.eye(4)
@@ -151,7 +156,7 @@ def _is_transition_safe(a: dict[str, float], b: dict[str, float], steps: int = 1
             if joint.get("type") != "fixed":
                 t = t @ kin._axis_rotation(joint.find("axis"), inter[joint.get("name")])
             if _pose_hits_table(t[:3, 3]):
-                return False
+                return False  # Kollision gefunden
     return True
 
 
@@ -179,12 +184,14 @@ def resolve_point(
     beim Debuggen von programs/beispiel_figur.json auftrat: mehrere gültige
     IK-Lösungen existierten, aber die naiv erste gefundene kollidierte.
     """
+    # direkte Gelenkpose: nur Grad -> Radiant umrechnen
     if point.joints_deg is not None:
         return {j: math.radians(deg) for j, deg in point.joints_deg.items()}
 
     if point.xyz is None:
         raise ValueError(f"Punkt '{point.name}' hat weder 'joints' noch 'xyz'.")
 
+    # kartesisches Ziel: Zielpose (Position + Orientierung) aufbauen
     target = np.eye(4)
     target[:3, :3] = (
         _rpy_deg_to_matrix(point.rpy_deg) if point.rpy_deg is not None else _DEFAULT_TOOL_R
@@ -196,6 +203,7 @@ def resolve_point(
     if primary is not None:
         candidates.append(primary)
 
+    # bei Bedarf mit alternativen Startstellungen weitere Lösungen suchen
     if allow_fallback:
         for j1 in _FALLBACK_J1:
             for j2, j3, j4 in _FALLBACK_ELBOWS:
@@ -214,9 +222,21 @@ def resolve_point(
             f"Punkt evtl. außerhalb der Reichweite."
         )
 
-    for candidate in candidates:
-        if _is_transition_safe(current_joints_rad, candidate):
-            return candidate
+    # Unter allen kollisionssicheren Kandidaten die mit der geringsten
+    # Gelenkbewegung zur aktuellen Pose wählen (statt einfach die erste
+    # gefundene) - sonst kann bei mehreren gültigen Ellbogen-Konfigurationen
+    # eine weit entfernte gewählt werden, obwohl eine deutlich näherliegende
+    # ebenfalls sicher wäre. Das führte z.B. bei den Tischecken-Kopfdrehungen
+    # (programs/beispiel_tisch_ecken.json) dazu, dass statt einer reinen
+    # Handgelenk-Drehung der ganze Arm in eine andere Ellbogen-Stellung
+    # umschwang, was der real simulierte Regler in der kurzen dwell_s-Zeit
+    # oft nicht rechtzeitig nachvollziehen konnte.
+    safe_candidates = [c for c in candidates if _is_transition_safe(current_joints_rad, c)]
+    if safe_candidates:
+        def joint_delta(c: dict[str, float]) -> float:
+            return sum(abs(c[j] - current_joints_rad[j]) for j in sim.JOINT_NAMES)
+
+        return min(safe_candidates, key=joint_delta)
 
     # Keiner der Kandidaten ist nachweislich sicher - besser als nichts ist
     # trotzdem die erste (kontinuitätsnächste) Lösung, aber der Aufrufer
@@ -253,6 +273,7 @@ def calibrate_table_offset(current_joints_rad: dict[str, float]) -> tuple[float,
 
     Gibt den neuen Offset (dx, dy, dz in m) zurück.
     """
+    # Differenz zwischen tatsächlicher und erwarteter Position berechnen und speichern
     actual_xyz = kin.forward_kinematics(current_joints_rad)[:3, 3]
     dx, dy, _dz = (a - r for a, r in zip(actual_xyz, sim.CALIBRATION_REFERENCE_XYZ))
     offset = (dx, dy, 0.0)
@@ -307,16 +328,20 @@ def _build_travel_waypoints(
     nachzukorrigieren. Gelenkpose-Ziele sind davon unberührt (die sind nicht
     tischrelativ gemeint).
     """
+    # Gelenkpose-Ziel: kein Umweg nötig
     if point.xyz is None:
         return [resolve_point(point, current_joints_rad)]
 
+    # kalibrierten Tisch-Offset einmal auf den Zielpunkt addieren
     if offset_xyz != (0.0, 0.0, 0.0):
         point = replace(point, xyz=tuple(p + o for p, o in zip(point.xyz, offset_xyz)))
 
     x, y, z = point.xyz
+    # Ziel liegt schon auf sicherer Höhe: direkt anfahren
     if z >= sim.SAFE_TRAVEL_Z - 1e-6:
         return [resolve_point(point, current_joints_rad)]
 
+    # kaum seitliche Bewegung nötig: ebenfalls direkt anfahren
     current_xyz = kin.forward_kinematics(current_joints_rad)[:3, 3]
     lateral_dist = math.hypot(current_xyz[0] - x, current_xyz[1] - y)
     if lateral_dist < 0.05:
@@ -336,6 +361,7 @@ def _build_travel_waypoints(
     # <1s pro Punkt). Für die verbleibenden bekannten Problemfälle wurden
     # stattdessen von Hand geprüfte sichere Zwischenpunkte in die
     # Programmdatei selbst eingefügt (siehe deren Kommentare/Namen).
+    # dreistufige Route: Rückzug hoch, seitlich verfahren, absenken
     try:
         retract = resolve_point(
             Point(name=f"{point.name} (Rückzug)", xyz=(current_xyz[0], current_xyz[1], sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
@@ -354,6 +380,7 @@ def _build_travel_waypoints(
 def _wait_while(event: "threading.Event | None", stop_event: "threading.Event | None") -> None:
     """Blockiert, solange `event` gesetzt ist (z.B. eine Pause), kehrt aber
     sofort zurück, sobald `stop_event` gesetzt wird."""
+    # kurzes Polling, bis Pause vorbei ist oder abgebrochen wird
     while event is not None and event.is_set() and not (stop_event is not None and stop_event.is_set()):
         time.sleep(0.1)
 
@@ -411,6 +438,7 @@ def run_program(
         print(f"Tisch-Offset aktiv: dx={offset_xyz[0]:+.4f} dy={offset_xyz[1]:+.4f} dz={offset_xyz[2]:+.4f} m")
 
     def send(joint_angles: dict[str, float]) -> None:
+        # sendet einen kompletten Satz Gelenkwinkel
         for joint, angle in joint_angles.items():
             msg = Double()
             msg.data = angle
@@ -419,14 +447,14 @@ def run_program(
     def stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
 
-    while True:
+    while True:  # nur relevant bei loop=True
         for point in program.points:
-            _wait_while(pause_event, stop_event)
+            _wait_while(pause_event, stop_event)  # bei Pause anhalten
             if stopped():
                 print("Programm abgebrochen.")
                 return current
             if get_current is not None:
-                current = get_current()
+                current = get_current()  # Position ggf. von außen auffrischen
             print(f"-> Punkt '{point.name}'")
             waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
             for i, target in enumerate(waypoints):
@@ -437,7 +465,7 @@ def run_program(
                 send(target)
                 current = target
                 if on_target_sent is not None:
-                    on_target_sent(current)
+                    on_target_sent(current)  # Aufrufer über neue Pose informieren
                 is_last = i == len(waypoints) - 1
                 _interruptible_sleep(point.dwell_s if is_last else 0.8, stop_event)
         if not loop or stopped():
@@ -461,6 +489,7 @@ def dry_run_program(program: Program) -> bool:
 
     Gibt True zurück, wenn alle Punkte aufgelöst werden konnten.
     """
+    # nur das URDF wird gebraucht, keine Simulation nötig
     sim.WORK_DIR.mkdir(exist_ok=True)
     urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
     sim.write_mount_urdf(urdf_path)
@@ -517,6 +546,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # ohne Programmangabe: nur auflisten
     if args.program is None:
         available = list_programs()
         if not available:
@@ -530,6 +560,7 @@ def main() -> None:
     program = Program.from_file(Path(args.program))
     print(f"Lade Programm '{program.name}' mit {len(program.points)} Punkten.")
 
+    # --dry-run: nur rechnen, keine Simulation starten
     if args.dry_run:
         ok = dry_run_program(program)
         raise SystemExit(0 if ok else 1)

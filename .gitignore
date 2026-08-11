@@ -18,3 +18,7 @@ __pycache__/
 # Editor-Swap-Dateien
 *~
 .#*
+
+# VS Code: lokale IntelliSense-Caches/Workspace-Zustand (u.a. browse.vc.db,
+# oft mehrere hundert MB bis GB groß) - rein lokal, gehört nicht ins Repo.
+/.vscode/

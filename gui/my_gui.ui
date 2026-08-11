@@ -24,28 +24,43 @@
     <resources />
   </project>
   <object class="tk.Toplevel" id="mainwindow" named="True">
-    <property name="height">750</property>
+    <property name="height">800</property>
     <property name="resizable">both</property>
     <property name="title" translatable="yes">FR20 Robotersteuerung</property>
     <property name="width">1200</property>
     <child>
       <object class="ttk.Frame" id="frame_main" named="True">
-        <property name="height">750</property>
+        <property name="height">800</property>
         <property name="width">1200</property>
         <layout manager="grid">
           <property name="column">0</property>
           <property name="padx">15</property>
           <property name="pady">15</property>
           <property name="row">0</property>
+          <property name="sticky">nsew</property>
         </layout>
         <child>
+          <object class="ttk.Label" id="label_title">
+            <property name="text" translatable="yes">FR20 Robotersteuerung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">2</property>
+              <property name="padx">20</property>
+              <property name="pady">5 15</property>
+              <property name="row">0</property>
+              <property name="sticky">w</property>
+            </layout>
+          </object>
+        </child>
+        <child>
           <object class="ttk.Label" id="label1">
-            <property name="text" translatable="yes">Form Körper 1</property>
+            <property name="text" translatable="yes">Form 1</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">20</property>
               <property name="pady">5</property>
-              <property name="row">0</property>
+              <property name="row">1</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
@@ -57,18 +72,20 @@
               <property name="column">0</property>
               <property name="padx">20</property>
               <property name="pady">20</property>
-              <property name="row">1</property>
+              <property name="row">2</property>
+              <property name="sticky">nsew</property>
             </layout>
           </object>
         </child>
         <child>
           <object class="ttk.Label" id="label2">
-            <property name="text" translatable="yes">Form Körper 2</property>
+            <property name="text" translatable="yes">Testen (Tischpose/Drehpose)</property>
             <layout manager="grid">
               <property name="column">1</property>
               <property name="padx">20</property>
               <property name="pady">5</property>
-              <property name="row">0</property>
+              <property name="row">1</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
@@ -80,19 +97,20 @@
               <property name="column">1</property>
               <property name="padx">20</property>
               <property name="pady">20</property>
-              <property name="row">1</property>
-              <property name="sticky">ew</property>
+              <property name="row">2</property>
+              <property name="sticky">nsew</property>
             </layout>
           </object>
         </child>
         <child>
           <object class="ttk.Label" id="label4">
-            <property name="text" translatable="yes">Form Körper 3</property>
+            <property name="text" translatable="yes">Tisch-Ecken</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">20</property>
               <property name="pady">5</property>
-              <property name="row">2</property>
+              <property name="row">3</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
@@ -103,16 +121,21 @@
               <property name="column">1</property>
               <property name="padx">20</property>
               <property name="pady">5</property>
-              <property name="row">2</property>
+              <property name="row">3</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
         <child>
           <object class="ttk.Button" id="button4">
+            <property name="command" type="command" cbtype="simple">on_button4pressed</property>
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="row">3</property>
+              <property name="padx">20</property>
+              <property name="pady">20</property>
+              <property name="row">4</property>
+              <property name="sticky">nsew</property>
             </layout>
           </object>
         </child>
@@ -121,8 +144,10 @@
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">1</property>
-              <property name="row">3</property>
-              <property name="sticky">ew</property>
+              <property name="padx">20</property>
+              <property name="pady">20</property>
+              <property name="row">4</property>
+              <property name="sticky">nsew</property>
             </layout>
           </object>
         </child>
@@ -132,7 +157,10 @@
             <property name="text" translatable="yes">Kalibrierung</property>
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="row">4</property>
+              <property name="padx">20</property>
+              <property name="pady">15 5</property>
+              <property name="row">5</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
@@ -142,7 +170,10 @@
             <property name="text" translatable="yes">Beenden</property>
             <layout manager="grid">
               <property name="column">1</property>
-              <property name="row">4</property>
+              <property name="padx">20</property>
+              <property name="pady">15 5</property>
+              <property name="row">5</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
@@ -283,6 +314,28 @@
             <property name="text" translatable="yes">x-</property>
             <layout manager="grid">
               <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">4</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button20">
+            <property name="text" translatable="yes">z+</property>
+            <layout manager="grid">
+              <property name="column">3</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">2</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button21">
+            <property name="text" translatable="yes">z-</property>
+            <layout manager="grid">
+              <property name="column">3</property>
               <property name="padx">10</property>
               <property name="pady">10</property>
               <property name="row">4</property>

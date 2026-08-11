@@ -319,6 +319,7 @@ def gazebo_env_with_fr20_meshes() -> dict:
 
 
 def check_tool(name: str) -> None:
+    # Prüft, ob ein Kommandozeilentool (z.B. "gz") installiert ist
     if shutil.which(name) is None:
         sys.exit(
             f"Fehler: '{name}' wurde nicht gefunden. Bitte ROS 2 sourcen "
@@ -343,6 +344,7 @@ def save_table_offset(dx: float, dy: float, dz: float) -> None:
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    # Führt einen Befehl aus und gibt ihn vorher zur Nachvollziehbarkeit aus
     print(f"$ {' '.join(cmd)}")
     return subprocess.run(cmd, check=True, **kwargs)
 
@@ -446,6 +448,7 @@ def build_tube_rotation_model_sdf() -> str:
     (0 1 0) und das Trägheitsmoment im selben, unrotierten Bezugsrahmen -
     ohne zusätzliche Koordinatentransformationen.
     """
+    # Grundmaße für Ständer und Welle (Platzhaltergeometrie)
     stand_height = TUBE_ROTATION_Z
     shaft_length = TUBE_ROTATION_SHAFT_LENGTH_M
     shaft_radius = 0.02
@@ -731,6 +734,7 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation()
     verwenden.
     """
+    # Voraussetzungen prüfen und eigene gz-Partition einrichten
     for tool in ("gz", "ros2"):
         check_tool(tool)
     isolate_gz_partition()
@@ -739,11 +743,13 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     urdf_path = WORK_DIR / f"{MODEL_NAME}.urdf"
     world_path = WORK_DIR / "world.sdf"
 
+    # URDF (Roboter) und SDF-Welt (Raum, Tisch, Achse, Roboter) erzeugen
     write_mount_urdf(urdf_path)
     append_joint_position_controllers(urdf_path)
     robot_model_sdf = urdf_to_sdf_model(urdf_path)
     world_path.write_text(build_world_sdf(robot_model_sdf))
 
+    # Gazebo starten, optional ohne Fenster (-s = headless)
     gz_cmd = ["gz", "sim", "-r", str(world_path)]
     if headless:
         gz_cmd.insert(2, "-s")
@@ -752,6 +758,7 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     wait_for_world(WORLD_NAME)
     time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
 
+    # Publisher pro Gelenk anlegen (plus einen für die Rohr-Rotationsachse)
     Node = import_gz("transport").Node
     Double = import_gz("msgs", "double_pb2").Double
     node = Node()
@@ -764,6 +771,7 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
 
 def shutdown_simulation(gz_proc: subprocess.Popen) -> None:
     """Beendet einen mit launch_simulation() gestarteten gz-sim-Prozess sauber."""
+    # erst freundlich beenden, nach 10s notfalls erzwingen
     if gz_proc.poll() is None:
         gz_proc.terminate()
         try:
@@ -777,6 +785,7 @@ def shutdown_simulation(gz_proc: subprocess.Popen) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # --headless als einzige Option einlesen
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="gz-sim ohne GUI starten")
     args = parser.parse_args()

@@ -10,14 +10,15 @@ die ein von Hand erstelltes DH-Modell leicht übersieht.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET   # URDF-XML einlesen
 
-import numpy as np
+import numpy as np                   # Vektor-/Matrizenrechnung
 
 import fr20_ceiling_gazebo as sim
 
 
 def _rpy_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    # Roll/Pitch/Yaw -> 3x3 Rotationsmatrix
     cr, sr = np.cos(roll), np.sin(roll)
     cp, sp = np.cos(pitch), np.sin(pitch)
     cy, sy = np.cos(yaw), np.sin(yaw)
@@ -28,6 +29,7 @@ def _rpy_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 
 def _origin_transform(origin_elem: ET.Element | None) -> np.ndarray:
+    # baut die 4x4-Transformation aus dem <origin>-Element eines Joints
     t = np.eye(4)
     if origin_elem is None:
         return t
@@ -39,6 +41,7 @@ def _origin_transform(origin_elem: ET.Element | None) -> np.ndarray:
 
 
 def _axis_rotation(axis_elem: ET.Element | None, angle: float) -> np.ndarray:
+    # Rotation eines beweglichen Gelenks um seine Achse mit gegebenem Winkel
     axis = [1.0, 0.0, 0.0]
     if axis_elem is not None:
         axis = [float(v) for v in axis_elem.get("xyz", "1 0 0").split()]
@@ -59,6 +62,7 @@ class UrdfChain:
     """Kette von Joints von `root_link` bis `tip_link`, aus einem URDF geparst."""
 
     def __init__(self, urdf_path, root_link: str = "world", tip_link: str = "tool0") -> None:
+        # URDF laden und alle Joints nach Elternglied sortieren
         tree = ET.parse(urdf_path)
         root = tree.getroot()
 
@@ -67,6 +71,7 @@ class UrdfChain:
             parent = joint.find("parent").get("link")
             joints_by_parent.setdefault(parent, []).append(joint)
 
+        # Kette von root_link bis tip_link finden
         chain = self._find_chain(joints_by_parent, root_link, tip_link)
         if chain is None:
             raise ValueError(f"Kein Pfad von '{root_link}' zu '{tip_link}' im URDF gefunden.")
@@ -81,15 +86,16 @@ class UrdfChain:
         von denen nur einer auf einem Pfad zu `tip_link` liegt (z.B. ft_frame ist eine
         Sackgasse, flange->tool0 nicht)."""
         if link == tip_link:
-            return []
+            return []  # Ziel gefunden
         for joint in joints_by_parent.get(link, []):
             child = joint.find("child").get("link")
             sub_chain = UrdfChain._find_chain(joints_by_parent, child, tip_link)
             if sub_chain is not None:
                 return [joint] + sub_chain
-        return None
+        return None  # Sackgasse
 
     def forward_kinematics(self, joint_angles: dict) -> np.ndarray:
+        # multipliziert alle Kettenglieder durch, um die Werkzeugpose zu erhalten
         t = np.eye(4)
         for joint in self.chain:
             t = t @ _origin_transform(joint.find("origin"))
@@ -122,6 +128,7 @@ def load_chain() -> UrdfChain:
     laufen (siehe robot_program._is_transition_safe)."""
     global _chain_cache
     if _chain_cache is None:
+        # beim ersten Aufruf: URDF ggf. erzeugen und Kette einmalig laden
         urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
         if not urdf_path.exists():
             sim.WORK_DIR.mkdir(exist_ok=True)
@@ -137,7 +144,8 @@ def forward_kinematics(joint_angles: dict) -> np.ndarray:
 
 def _pose_error(current: np.ndarray, target: np.ndarray) -> np.ndarray:
     """6D-Fehler (Position + Rotationsvektor) zwischen zwei Posen."""
-    pos_err = target[:3, 3] - current[:3, 3]
+    pos_err = target[:3, 3] - current[:3, 3]   # Positionsdifferenz
+    # Rotationsdifferenz als Achse * Winkel
     r_err = target[:3, :3] @ current[:3, :3].T
     angle = np.arccos(np.clip((np.trace(r_err) - 1.0) / 2.0, -1.0, 1.0))
     if angle < 1e-8:
@@ -169,17 +177,19 @@ def inverse_kinematics(
     """
     chain = load_chain()
     names = chain.movable_joint_names
-    angles = np.array([seed[j] for j in names], dtype=float)
+    angles = np.array([seed[j] for j in names], dtype=float)  # Startwerte
     damping = 0.05
-    delta = 1e-6
+    delta = 1e-6  # kleine Störung für die numerische Ableitung
 
     for _ in range(max_iterations):
+        # aktuelle Pose berechnen und mit Ziel vergleichen
         joint_dict = dict(zip(names, angles))
         current_pose = chain.forward_kinematics(joint_dict)
         error = _pose_error(current_pose, target_pose)
         if np.linalg.norm(error) < tolerance:
-            return {j: float(a) for j, a in zip(names, angles)}
+            return {j: float(a) for j, a in zip(names, angles)}  # Ziel erreicht
 
+        # Jacobi-Matrix numerisch bestimmen
         jacobian = np.zeros((6, len(names)))
         for i in range(len(names)):
             perturbed = angles.copy()
@@ -198,6 +208,7 @@ def inverse_kinematics(
             jacobian[:3, i] = pos_diff
             jacobian[3:, i] = rot_diff
 
+        # gedämpfte Least-Squares-Lösung, Schritt begrenzen, Grenzen einhalten
         jjt = jacobian @ jacobian.T + (damping ** 2) * np.eye(6)
         delta_angles = jacobian.T @ np.linalg.solve(jjt, error)
         step_norm = np.max(np.abs(delta_angles))
@@ -205,4 +216,4 @@ def inverse_kinematics(
             delta_angles *= max_step_rad / step_norm
         angles = np.clip(angles + delta_angles, -joint_limit_rad, joint_limit_rad)
 
-    return None
+    return None  # keine Lösung gefunden

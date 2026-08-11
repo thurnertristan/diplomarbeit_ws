@@ -1,13 +1,13 @@
-import pathlib
-import subprocess
-import sys
-import threading
-import traceback
+import pathlib            # Dateipfade
+import subprocess         # Gazebo-Prozess
+import sys                # sys.path anpassen für Imports aus dem Workspace-Root
+import threading          # Hintergrund-Threads, Events, Lock
+import traceback          # Fehler aus Hintergrund-Threads ausgeben
 
-import pygubu
+import pygubu              # lädt die .ui-Oberfläche
 import tkinter as tk
-from tkinter import messagebox, ttk
-from PIL import Image, ImageTk
+from tkinter import messagebox, ttk   # Dialoge und gestylte Widgets
+from PIL import Image, ImageTk         # Bilder laden/skalieren
 
 PROJECT_PATH = pathlib.Path(__file__).parent
 PROJECT_UI = PROJECT_PATH / "my_gui.ui"
@@ -24,6 +24,7 @@ import robot_program as rp  # noqa: E402
 PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_gelenkpose.json"
 PROGRAM_TISCH = REPO_ROOT / "programs" / "beispiel_tisch.json"
 PROGRAM_FIGUR1 = REPO_ROOT / "programs" / "beispiel_figur1.json"
+PROGRAM_ECKEN = REPO_ROOT / "programs" / "beispiel_tisch_ecken.json"
 
 # Schrittweite (Meter) pro Jog-Schritt (X+/X-/Y+/Y-) und Intervall (ms)
 # zwischen den Schritten, solange der Button gehalten wird.
@@ -46,10 +47,29 @@ class MyApp:
         # in window2/window3 werden erst bei deren erstem Öffnen gestylt
         # (siehe on_Fabipressed/on_button2pressed), da pygubu sie vorher
         # noch nicht erzeugt hat.
+        self._style_widget("label_title", "Title.TLabel")
         for label_id in ("label1", "label2", "label4", "label5"):
             self._style_widget(label_id, "Header.TLabel")
+        for button_id in ("button2", "button3", "button4", "button31"):
+            self._style_widget(button_id, "Card.TButton")
         self._style_widget("button5", "Danger.TButton")
         self._style_widget("button18", "Warning.TButton")
+
+        # Die Kachel-Bilder liegen in voller Auflösung vor (270x420 px) - zwei
+        # Reihen davon plus Labels/Buttons sind zusammen deutlich höher als
+        # 768px und lassen "Kalibrierung"/"Beenden" auf kleineren Bildschirmen
+        # unten aus dem Fenster fallen. Deshalb hier verkleinert einsetzen,
+        # damit das Hauptfenster komplett auf den Bildschirm passt.
+        self.set_image("button2", "Form1r.png", size=(150, 233))
+        self.set_image("button3", "platzhalter_neu.png", size=(150, 233))
+        self.set_image("button4", "platzhalter_neu.png", size=(150, 233))
+        self.set_image("button31", "platzhalter_neu.png", size=(150, 233))
+
+        # Die beiden Bild-Kachel-Zeilen (row 2 und 4 in frame_main, siehe .ui)
+        # bekommen beim Vergrößern/Verkleinern des Fensters den meisten
+        # zusätzlichen Platz - Titel-/Beschriftungszeilen bleiben kompakt.
+        self._make_responsive(self.mainwindow, self.builder.get_object("frame_main"), stretch_rows=(2, 4))
+        self._fit_window_to_screen(self.mainwindow)
 
         # Zustand der Gazebo-Simulation/Programmausführung, siehe
         # _ensure_simulation_running() und _run_program_async().
@@ -102,25 +122,78 @@ class MyApp:
         except tk.TclError:
             pass  # "clam" nicht verfügbar - beim Standard-Theme bleiben
 
-        bg = "#f2f4f7"
-        text = "#20242b"
+        # Grundfarben und Schrift für die ganze Oberfläche - etwas kühlere,
+        # kräftigere Akzentfarbe (Indigo) als vorher für einen moderneren Look.
+        bg = "#eef1f6"
+        card_bg = "#ffffff"
+        text = "#1b1f27"
+        muted = "#5b6472"
+        accent = "#3654d1"
         base_font = ("Helvetica", 11)
 
         self.mainwindow.configure(background=bg)
         style.configure("TFrame", background=bg)
         style.configure("TLabel", background=bg, foreground=text, font=base_font)
-        style.configure("Header.TLabel", background=bg, foreground=text, font=("Helvetica", 13, "bold"))
+        style.configure("Header.TLabel", background=bg, foreground=muted, font=("Helvetica", 12, "bold"))
+        style.configure(
+            "Title.TLabel", background=bg, foreground=accent, font=("Helvetica", 20, "bold")
+        )
         style.configure("TButton", font=base_font, padding=(14, 10))
+        # Bildkacheln bekommen einen dezenten weißen "Karten"-Rahmen statt der
+        # sonst unsichtbaren Standard-Button-Fläche - wirkt wie eine Karte,
+        # auf der das Vorschaubild liegt.
+        style.configure(
+            "Card.TButton",
+            background=card_bg,
+            bordercolor="#d7dbe3",
+            relief="flat",
+            padding=6,
+        )
+        style.map("Card.TButton", background=[("active", "#e7ecf7")])
 
         def colored_button(name: str, color: str, active: str) -> None:
+            # legt einen benannten Button-Style mit Grundfarbe + Hover-Farbe an
             style.configure(name, background=color, foreground="white", font=base_font, padding=(14, 10))
             style.map(name, background=[("active", active), ("disabled", "#c8ccd2")])
 
-        colored_button("Primary.TButton", "#2f6fed", "#245ac9")   # Start
+        # Button-Farben je nach Bedeutung (Start/Weiter/Pause/Abbruch/Jog)
+        colored_button("Primary.TButton", accent, "#2842a8")      # Start
         colored_button("Success.TButton", "#2f9e57", "#22803f")   # Weiter
         colored_button("Warning.TButton", "#d98c00", "#b57400")   # Pause
         colored_button("Danger.TButton", "#d9453f", "#b7332e")    # Beenden/Abbruch
         colored_button("Jog.TButton", "#586470", "#414a54")       # X/Y/Z-Jog
+
+    def _make_responsive(self, window: tk.Toplevel, container: ttk.Frame, stretch_rows: tuple[int, ...] = ()) -> None:
+        """Lässt Inhalt eines Fensters beim Verkleinern/Vergrößern mitwachsen.
+
+        Ohne explizite Gewichtung bleiben Tkinter-Grid-Zellen beim Resizen
+        fix in ihrer ursprünglichen Größe - überschüssiger Platz sammelt sich
+        ungenutzt am Rand. columnconfigure/rowconfigure(weight=1) verteilt
+        zusätzlichen Platz stattdessen auf die Zellen, und container muss
+        selbst mit sticky='nsew' im Elternfenster hängen (siehe .ui), damit
+        es überhaupt mitwächst. `stretch_rows` bekommt zusätzlich Gewicht,
+        damit z.B. die Bild-Kacheln wachsen, während Titel-/Button-Zeilen
+        ihre feste Höhe behalten."""
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+        cols, rows = container.grid_size()
+        for c in range(cols):
+            container.columnconfigure(c, weight=1)
+        for r in range(rows):
+            container.rowconfigure(r, weight=1 if r in stretch_rows else 0)
+
+    def _fit_window_to_screen(self, window: tk.Toplevel, margin: int = 80) -> None:
+        """Verkleinert und zentriert ein Fenster, falls es größer als der
+        verfügbare Bildschirmplatz ist - verhindert, dass Buttons am unteren
+        Rand (z.B. 'Beenden') auf kleineren Bildschirmen unsichtbar werden."""
+        window.update_idletasks()
+        req_w, req_h = window.winfo_reqwidth(), window.winfo_reqheight()
+        screen_w, screen_h = window.winfo_screenwidth(), window.winfo_screenheight()
+        w = min(req_w, screen_w - margin)
+        h = min(req_h, screen_h - margin)
+        x = max(0, (screen_w - w) // 2)
+        y = max(0, (screen_h - h) // 2)
+        window.geometry(f"{w}x{h}+{x}+{y}")
 
     def _style_widget(self, widget_id: str, style_name: str | None = None, text: str | None = None) -> None:
         """Setzt Style und/oder Text eines schon gebauten Widgets - kleiner
@@ -185,6 +258,7 @@ class MyApp:
         lief und gestoppt wurde - False, wenn ohnehin nichts lief."""
         if self._program_thread is None or not self._program_thread.is_alive():
             return False
+        # Pause aufheben, dann abbrechen und auf das Thread-Ende warten
         self._pause_event.clear()
         self._stop_event.set()
         self._program_thread.join(timeout=5.0)
@@ -381,13 +455,19 @@ class MyApp:
         print("Programm wird fortgesetzt.")
 
     def on_abbruch_pressed(self):
-        """Button 'Abbruch' (button19): bricht ein laufendes Punktprogramm
-        sofort und endgültig ab (nicht nur pausieren) - Gazebo und die GUI
-        bleiben dabei offen."""
+        """Button 'Abbruch' (button19, nur in window3 gebunden): bricht ein
+        laufendes Punktprogramm sofort und endgültig ab (nicht nur
+        pausieren) - Gazebo bleibt dabei offen. `_run_program_async`'s
+        `on_done` (back_to_main) wird bei einem Abbruch bewusst NICHT
+        aufgerufen (siehe dortiger Kommentar zu stop_event), daher hier
+        zusätzlich window3 verstecken und das Hauptfenster wieder zeigen -
+        sonst bliebe der Nutzer nach "Abbruch" im leeren window3 stecken."""
         if not self._stop_running_program():
             print("Kein Programm läuft gerade - Abbruch hat nichts zu tun.")
             return
         print("Programm abgebrochen.")
+        self.window3.withdraw()
+        self.mainwindow.deiconify()
 
     def _open_calibration_window(self):
         """Öffnet das Kalibrierungs-Fenster (window4) - einmalig automatisch
@@ -410,6 +490,8 @@ class MyApp:
             self._bind_jog_hold('button28', dz=-JOG_STEP_M, symbol="Z ▾")
             self._style_widget("button29", "Primary.TButton")
             self._style_widget("button30", "Success.TButton")
+            self._make_responsive(self.window4, self.builder.get_object("frame_window4"))
+            self._fit_window_to_screen(self.window4)
         else:
             self.window4.deiconify()
         self.window4.lift()
@@ -499,15 +581,16 @@ class MyApp:
             f"Neuer Tisch-Offset gespeichert:\ndx = {dx:+.4f} m\ndy = {dy:+.4f} m\ndz = {dz:+.4f} m",
         )
 
-    def on_button2pressed(self):
-        """Button 'Form Körper 1': zeigt window3 ('Programm läuft...') statt
-        des Hauptfensters und fährt programs/beispiel_figur1.json ab. Sobald
-        das Programm fertig ist (oder abbricht), schließt sich window3
-        wieder und das Hauptfenster erscheint erneut.
+    def _run_figure_program(self, program_path: pathlib.Path) -> None:
+        """Zeigt window3 ('Programm läuft...') statt des Hauptfensters und
+        fährt die übergebene Programmdatei ab. Sobald das Programm fertig
+        ist (oder abbricht), schließt sich window3 wieder und das
+        Hauptfenster erscheint erneut. Gemeinsamer Kern hinter allen
+        'Form Körper N'-Buttons im Hauptfenster.
 
         window3 enthält (im Designer so angelegt) auch die Jog-Buttons
-        (x+/x-/y+/y-) sowie Pause/Weiter/Abbruch - macht Sinn, da diese nur
-        Sinn ergeben, während gerade ein Programm läuft."""
+        (x+/x-/y+/y-/z+/z-) sowie Pause/Weiter/Abbruch - macht Sinn, da diese
+        nur Sinn ergeben, während gerade ein Programm läuft."""
         self.mainwindow.withdraw()
         if getattr(self, 'window3', None) is None:
             self.window3 = self.builder.get_object('window3', self.mainwindow)
@@ -524,7 +607,7 @@ class MyApp:
             self._style_widget("button16", "Warning.TButton")
             self._style_widget("button17", "Success.TButton")
             self._style_widget("button19", "Danger.TButton")
-            self._style_widget("button22", "Primary.TButton")
+            self._make_responsive(self.window3, self.builder.get_object("frame_window3"))
         else:
             self.window3.deiconify()
 
@@ -532,20 +615,33 @@ class MyApp:
             self.window3.withdraw()
             self.mainwindow.deiconify()
 
-        self._run_program_async(PROGRAM_FIGUR1, on_done=back_to_main)
+        self._run_program_async(program_path, on_done=back_to_main)
+
+    def on_button2pressed(self):
+        """Button 'Form Körper 1': fährt programs/beispiel_figur1.json ab."""
+        self._run_figure_program(PROGRAM_FIGUR1)
+
+    def on_button4pressed(self):
+        """Button 'Tisch-Ecken': fährt programs/beispiel_tisch_ecken.json ab -
+        der Arm fährt jede der vier Tischecken mit 0,5 m Höhenabstand über
+        der Tischplatte an und dreht dort einmal den Werkzeugkopf (yaw 360°)."""
+        self._run_figure_program(PROGRAM_ECKEN)
 
     def on_Fabipressed(self):
+        # öffnet window2 (analog zu on_button2pressed, ohne Programmstart)
         self.mainwindow.withdraw()
         if getattr(self, 'window2', None) is None:
             self.window2 = self.builder.get_object('window2', self.mainwindow)
             self.builder.connect_callbacks(self)   # <-- Callbacks für window2 verbinden!
-            self.window2.configure(background="#f2f4f7")
+            self.window2.configure(background="#eef1f6")
             self._style_widget("button12", "Primary.TButton")
             self._style_widget("button13", "Primary.TButton")
+            self._make_responsive(self.window2, self.builder.get_object("frame_window2"))
         else:
             self.window2.deiconify()
 
     def on_sebblpressed(self):
+        # zurück zum Hauptfenster
         self.window2.withdraw()
         self.mainwindow.deiconify()
 
@@ -557,6 +653,7 @@ class MyApp:
         self.on_close()
 
     def on_close(self):
+        # zentrale Aufräum-Routine: Jog stoppen, Programm abbrechen, Gazebo beenden, Fenster schließen
         self._release_jog()
         self._stop_running_program()
         if self._gz_proc is not None:
@@ -564,6 +661,7 @@ class MyApp:
         self.mainwindow.destroy()
 
     def run(self):
+        # Aufräum-Routine beim Schließen des Fensters (X-Button) aufrufen
         self.mainwindow.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Zuerst die Kalibrierung zeigen (siehe _open_calibration_window) -
