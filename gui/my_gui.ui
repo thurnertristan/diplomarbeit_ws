@@ -37,7 +37,6 @@
           <property name="padx">15</property>
           <property name="pady">15</property>
           <property name="row">0</property>
-          <property name="sticky">nsew</property>
         </layout>
         <child>
           <object class="ttk.Label" id="label_title">
@@ -53,7 +52,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label1">
+          <object class="ttk.Label" id="label_figur1_caption">
             <property name="text" translatable="yes">Form 1</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -65,8 +64,8 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button2">
-            <property name="command" type="command" cbtype="simple">on_button2pressed</property>
+          <object class="ttk.Button" id="button_figur1">
+            <property name="command" type="command" cbtype="simple">on_figur1_pressed</property>
             <property name="image">Form1r.png</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -78,7 +77,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label2">
+          <object class="ttk.Label" id="label_testen_caption">
             <property name="text" translatable="yes">Testen (Tischpose/Drehpose)</property>
             <layout manager="grid">
               <property name="column">1</property>
@@ -90,8 +89,8 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button3">
-            <property name="command" type="command" cbtype="simple">on_Fabipressed</property>
+          <object class="ttk.Button" id="button_testen">
+            <property name="command" type="command" cbtype="simple">on_testen_pressed</property>
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">1</property>
@@ -103,7 +102,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label4">
+          <object class="ttk.Label" id="label_tischecken_caption">
             <property name="text" translatable="yes">Tisch-Ecken</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -115,7 +114,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label5">
+          <object class="ttk.Label" id="label_platzhalter_caption">
             <property name="text" translatable="yes">Form Körper 4</property>
             <layout manager="grid">
               <property name="column">1</property>
@@ -127,8 +126,8 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button4">
-            <property name="command" type="command" cbtype="simple">on_button4pressed</property>
+          <object class="ttk.Button" id="button_tischecken">
+            <property name="command" type="command" cbtype="simple">on_tischecken_pressed</property>
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -140,7 +139,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button31">
+          <object class="ttk.Button" id="button_platzhalter">
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">1</property>
@@ -152,9 +151,9 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button18">
-            <property name="command" type="command" cbtype="simple">on_kalibrierung_pressed</property>
-            <property name="text" translatable="yes">Kalibrierung</property>
+          <object class="ttk.Button" id="button_optionen">
+            <property name="command" type="command" cbtype="simple">on_optionen_pressed</property>
+            <property name="text" translatable="yes">Optionen</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">20</property>
@@ -165,7 +164,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button5">
+          <object class="ttk.Button" id="button_beenden">
             <property name="command" type="command" cbtype="simple">on_beenden_pressed</property>
             <property name="text" translatable="yes">Beenden</property>
             <layout manager="grid">
@@ -180,343 +179,1122 @@
       </object>
     </child>
   </object>
-  <object class="tk.Toplevel" id="window2" named="True">
-    <property name="height">200</property>
-    <property name="title" translatable="yes">Manuelle Steuerung</property>
-    <property name="width">200</property>
+  <object class="tk.Toplevel" id="window_optionen" named="True">
+    <property name="height">520</property>
+    <property name="title" translatable="yes">Optionen</property>
+    <property name="width">380</property>
     <child>
-      <object class="ttk.Frame" id="frame_window2" named="True">
-        <property name="height">200</property>
-        <property name="width">200</property>
+      <object class="ttk.Frame" id="frame_optionen" named="True">
+        <property name="height">520</property>
+        <property name="width">380</property>
         <layout manager="grid">
           <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
           <property name="row">0</property>
         </layout>
         <child>
-          <object class="ttk.Button" id="button1">
-            <property name="command" type="command" cbtype="simple">on_sebblpressed</property>
-            <property name="text" translatable="yes">Zurück</property>
+          <object class="ttk.Label" id="label_optionen_title">
+            <property name="text" translatable="yes">Optionen</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">10</property>
-              <property name="pady">10</property>
+              <property name="pady">5 20</property>
               <property name="row">0</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button12">
-            <property name="command" type="command" cbtype="simple">on_btgelenk</property>
-            <property name="text" translatable="yes">Start</property>
+          <object class="ttk.Button" id="button_optionen_kalibrierung">
+            <property name="command" type="command" cbtype="simple">on_kalibrierung_pressed</property>
+            <property name="text" translatable="yes">Kalibrierung</property>
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="row">7</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button13">
-            <property name="command" type="command" cbtype="simple">on_bttisch</property>
-            <property name="text" translatable="yes">Start</property>
-            <layout manager="grid">
-              <property name="column">01</property>
-              <property name="row">7</property>
-              <property name="sticky">n</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Label" id="label8">
-            <property name="text" translatable="yes">Gelenkpose</property>
-            <layout manager="grid">
-              <property name="column">0</property>
-              <property name="row">6</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Label" id="label9">
-            <property name="text" translatable="yes">Tisch</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="row">6</property>
-            </layout>
-          </object>
-        </child>
-      </object>
-    </child>
-  </object>
-  <object class="tk.Toplevel" id="window3" named="True">
-    <property name="height">420</property>
-    <property name="title" translatable="yes">Programm läuft</property>
-    <property name="width">480</property>
-    <child>
-      <object class="ttk.Frame" id="frame_window3" named="True">
-        <property name="height">420</property>
-        <property name="width">480</property>
-        <layout manager="grid">
-          <property name="column">0</property>
-          <property name="row">0</property>
-        </layout>
-        <child>
-          <object class="ttk.Label" id="label3">
-            <property name="text" translatable="yes">Programm läuft...</property>
-            <layout manager="grid">
-              <property name="column">0</property>
-              <property name="row">0</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Label" id="label10">
-            <property name="text" translatable="yes">Roboter Steuerung</property>
-            <layout manager="grid">
-              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">6</property>
               <property name="row">1</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button6">
-            <property name="text" translatable="yes">x+</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">2</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button11">
-            <property name="text" translatable="yes">y-</property>
+          <object class="ttk.Button" id="button_optionen_manuell">
+            <property name="command" type="command" cbtype="simple">on_manuell_pressed</property>
+            <property name="text" translatable="yes">Manuelle Steuerung</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">3</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button14">
-            <property name="text" translatable="yes">y+</property>
-            <layout manager="grid">
-              <property name="column">2</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">3</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button15">
-            <property name="text" translatable="yes">x-</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">4</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button20">
-            <property name="text" translatable="yes">z+</property>
-            <layout manager="grid">
-              <property name="column">3</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
+              <property name="pady">6</property>
               <property name="row">2</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button21">
-            <property name="text" translatable="yes">z-</property>
-            <layout manager="grid">
-              <property name="column">3</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">4</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Label" id="label12">
-            <property name="text" translatable="yes">Pause/Weiter
-</property>
+          <object class="ttk.Button" id="button_optionen_log">
+            <property name="command" type="command" cbtype="simple">on_log_pressed</property>
+            <property name="text" translatable="yes">Log anzeigen</property>
             <layout manager="grid">
               <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">6</property>
+              <property name="row">3</property>
+              <property name="sticky">ew</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="frame_einstellungen">
+            <property name="text" translatable="yes">Einstellungen</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">16 6</property>
+              <property name="row">4</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Label" id="label_setting_jogstep">
+                <property name="text" translatable="yes">Jog-Schrittweite:</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">0</property>
+                  <property name="sticky">w</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Combobox" id="combo_jogstep">
+                <layout manager="grid">
+                  <property name="column">1</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Label" id="label_setting_schrift">
+                <property name="text" translatable="yes">Schriftgröße:</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">1</property>
+                  <property name="sticky">w</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Combobox" id="combo_schriftgroesse">
+                <layout manager="grid">
+                  <property name="column">1</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">1</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Label" id="label_setting_zoom">
+                <property name="text" translatable="yes">Zoom:</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">2</property>
+                  <property name="sticky">w</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Combobox" id="combo_zoom">
+                <layout manager="grid">
+                  <property name="column">1</property>
+                  <property name="padx">4</property>
+                  <property name="pady">6</property>
+                  <property name="row">2</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Button" id="button_darkmode_toggle">
+                <property name="command" type="command" cbtype="simple">on_darkmode_toggle_pressed</property>
+                <property name="text" translatable="yes">🌙 Dunkles Design</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">2</property>
+                  <property name="padx">4</property>
+                  <property name="pady">12 4</property>
+                  <property name="row">3</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button_optionen_schliessen">
+            <property name="command" type="command" cbtype="simple">on_optionen_schliessen_pressed</property>
+            <property name="text" translatable="yes">◂ Schließen</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">20 5</property>
               <property name="row">5</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button16">
-            <property name="command" type="command" cbtype="simple">on_pause_pressed</property>
-            <property name="text" translatable="yes">Pause</property>
-            <layout manager="grid">
-              <property name="column">0</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">6</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button17">
-            <property name="command" type="command" cbtype="simple">on_weiter_pressed</property>
-            <property name="text" translatable="yes">Weiter</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">6</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button19">
-            <property name="command" type="command" cbtype="simple">on_abbruch_pressed</property>
-            <property name="text" translatable="yes">Abbruch</property>
-            <layout manager="grid">
-              <property name="column">2</property>
-              <property name="row">6</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
       </object>
     </child>
   </object>
-  <object class="tk.Toplevel" id="window4" named="True">
-    <property name="height">480</property>
-    <property name="title" translatable="yes">Nullpunkt-Kalibrierung</property>
+  <object class="tk.Toplevel" id="window_log" named="True">
+    <property name="height">420</property>
+    <property name="title" translatable="yes">Log</property>
     <property name="width">560</property>
     <child>
-      <object class="ttk.Frame" id="frame_window4" named="True">
-        <property name="height">480</property>
+      <object class="ttk.Frame" id="frame_log" named="True">
+        <property name="height">420</property>
         <property name="width">560</property>
         <layout manager="grid">
           <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
           <property name="row">0</property>
         </layout>
         <child>
-          <object class="ttk.Label" id="label14">
-            <property name="text" translatable="yes">Nullpunkt-Kalibrierung</property>
+          <object class="ttk.Label" id="label_log_title">
+            <property name="text" translatable="yes">Log</property>
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="columnspan">3</property>
-              <property name="padx">20</property>
-              <property name="pady">10</property>
+              <property name="columnspan">2</property>
+              <property name="padx">10</property>
+              <property name="pady">5 15</property>
               <property name="row">0</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label15">
+          <object class="tk.Text" id="text_log">
+            <property name="height">18</property>
+            <property name="width">60</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10 0</property>
+              <property name="row">1</property>
+              <property name="sticky">nsew</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Scrollbar" id="scroll_log">
+            <property name="orient">vertical</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">0 10</property>
+              <property name="row">1</property>
+              <property name="sticky">ns</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button_log_schliessen">
+            <property name="command" type="command" cbtype="simple">on_log_schliessen_pressed</property>
+            <property name="text" translatable="yes">◂ Schließen</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">2</property>
+              <property name="padx">10</property>
+              <property name="pady">15 5</property>
+              <property name="row">2</property>
+              <property name="sticky">ew</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window_manuell" named="True">
+    <property name="height">400</property>
+    <property name="title" translatable="yes">Manuelle Steuerung</property>
+    <property name="width">420</property>
+    <child>
+      <object class="ttk.Frame" id="frame_manuell" named="True">
+        <property name="height">400</property>
+        <property name="width">420</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label_manuell_title">
+            <property name="text" translatable="yes">Manuelle Steuerung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">5 15</property>
+              <property name="row">0</property>
+              <property name="sticky">w</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="frame_jog_manuell">
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">1</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Button" id="button_toggle_jog_manuell">
+                <property name="text" translatable="yes">▾ Manuelle Steuerung (Jog)</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Frame" id="frame_jog_controls_manuell">
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">1</property>
+                  <property name="sticky">nsew</property>
+                </layout>
+                <child>
+                  <object class="ttk.Label" id="label_jog_xy_header_manuell">
+                    <property name="text" translatable="yes">Ebene (X / Y)</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="columnspan">3</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_z_header_manuell">
+                    <property name="text" translatable="yes">Höhe (Z)</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xplus_manuell">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yminus_manuell">
+                    <property name="text" translatable="yes">◀</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_center_manuell">
+                    <property name="text" translatable="yes">•</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yplus_manuell">
+                    <property name="text" translatable="yes">▶</property>
+                    <layout manager="grid">
+                      <property name="column">2</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xminus_manuell">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep_jog_manuell">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">3</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zplus_manuell">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zminus_manuell">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep2_jog_manuell">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">5</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_rot_header_manuell">
+                    <property name="text" translatable="yes">Drehung</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotplus_manuell">
+                    <property name="text" translatable="yes">⟳</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotminus_manuell">
+                    <property name="text" translatable="yes">⟲</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Label" id="label_position_readout_manuell">
+                <property name="text" translatable="yes">TCP  x=+0.000  y=+0.000  z=+0.000 m   j6=+0.0°</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="pady">10 0</property>
+                  <property name="row">2</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button_manuell_schliessen">
+            <property name="command" type="command" cbtype="simple">on_manuell_schliessen_pressed</property>
+            <property name="text" translatable="yes">◂ Schließen</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">20 5</property>
+              <property name="row">2</property>
+              <property name="sticky">ew</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window_testen" named="True">
+    <property name="height">260</property>
+    <property name="title" translatable="yes">Testen</property>
+    <property name="width">420</property>
+    <child>
+      <object class="ttk.Frame" id="frame_testen" named="True">
+        <property name="height">260</property>
+        <property name="width">420</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label_testen_title">
+            <property name="text" translatable="yes">Testen (Tischpose / Drehpose)</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">2</property>
+              <property name="padx">10</property>
+              <property name="pady">5 20</property>
+              <property name="row">0</property>
+              <property name="sticky">w</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="card_gelenkpose">
+            <property name="text" translatable="yes">Gelenkpose</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">1</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Button" id="button_start_gelenkpose">
+                <property name="command" type="command" cbtype="simple">on_gelenkpose_pressed</property>
+                <property name="text" translatable="yes">Start</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">15</property>
+                  <property name="pady">15</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="card_tisch">
+            <property name="text" translatable="yes">Tisch</property>
+            <layout manager="grid">
+              <property name="column">1</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">1</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Button" id="button_start_tisch">
+                <property name="command" type="command" cbtype="simple">on_tisch_pressed</property>
+                <property name="text" translatable="yes">Start</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">15</property>
+                  <property name="pady">15</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Button" id="button_testen_zurueck">
+            <property name="command" type="command" cbtype="simple">on_testen_zurueck_pressed</property>
+            <property name="text" translatable="yes">◂ Zurück</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">2</property>
+              <property name="padx">10</property>
+              <property name="pady">20 5</property>
+              <property name="row">2</property>
+              <property name="sticky">ew</property>
+            </layout>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window_programm" named="True">
+    <property name="height">460</property>
+    <property name="title" translatable="yes">Programm läuft</property>
+    <property name="width">480</property>
+    <child>
+      <object class="ttk.Frame" id="frame_programm" named="True">
+        <property name="height">460</property>
+        <property name="width">480</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label_programm_status">
+            <property name="text" translatable="yes">Programm läuft ...</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">3</property>
+              <property name="padx">10</property>
+              <property name="pady">5 15</property>
+              <property name="row">0</property>
+              <property name="sticky">w</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="frame_jog_programm">
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">3</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">1</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Button" id="button_toggle_jog_programm">
+                <property name="text" translatable="yes">▾ Manuelle Steuerung (Jog)</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Frame" id="frame_jog_controls_programm">
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">1</property>
+                  <property name="sticky">nsew</property>
+                </layout>
+                <child>
+                  <object class="ttk.Label" id="label_jog_xy_header_programm">
+                    <property name="text" translatable="yes">Ebene (X / Y)</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="columnspan">3</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_z_header_programm">
+                    <property name="text" translatable="yes">Höhe (Z)</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xplus_programm">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yminus_programm">
+                    <property name="text" translatable="yes">◀</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_center_programm">
+                    <property name="text" translatable="yes">•</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yplus_programm">
+                    <property name="text" translatable="yes">▶</property>
+                    <layout manager="grid">
+                      <property name="column">2</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xminus_programm">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep_jog_programm">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">3</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zplus_programm">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zminus_programm">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep2_jog_programm">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">5</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_rot_header_programm">
+                    <property name="text" translatable="yes">Drehung</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotplus_programm">
+                    <property name="text" translatable="yes">⟳</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotminus_programm">
+                    <property name="text" translatable="yes">⟲</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Label" id="label_position_readout_programm">
+                <property name="text" translatable="yes">TCP  x=+0.000  y=+0.000  z=+0.000 m   j6=+0.0°</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="pady">10 0</property>
+                  <property name="row">2</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Labelframe" id="frame_ablauf_programm">
+            <property name="text" translatable="yes">Ablaufsteuerung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">3</property>
+              <property name="padx">10</property>
+              <property name="pady">10</property>
+              <property name="row">2</property>
+              <property name="sticky">nsew</property>
+            </layout>
+            <child>
+              <object class="ttk.Button" id="button_pause">
+                <property name="command" type="command" cbtype="simple">on_pause_pressed</property>
+                <property name="text" translatable="yes">⏸ Pause</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="padx">8</property>
+                  <property name="pady">10</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Button" id="button_weiter_programm">
+                <property name="command" type="command" cbtype="simple">on_weiter_pressed</property>
+                <property name="text" translatable="yes">▶ Weiter</property>
+                <layout manager="grid">
+                  <property name="column">1</property>
+                  <property name="padx">8</property>
+                  <property name="pady">10</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Button" id="button_abbruch">
+                <property name="command" type="command" cbtype="simple">on_abbruch_pressed</property>
+                <property name="text" translatable="yes">✕ Abbruch</property>
+                <layout manager="grid">
+                  <property name="column">2</property>
+                  <property name="padx">8</property>
+                  <property name="pady">10</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+  <object class="tk.Toplevel" id="window_kalibrierung" named="True">
+    <property name="height">560</property>
+    <property name="title" translatable="yes">Nullpunkt-Kalibrierung</property>
+    <property name="width">560</property>
+    <child>
+      <object class="ttk.Frame" id="frame_kalibrierung" named="True">
+        <property name="height">560</property>
+        <property name="width">560</property>
+        <layout manager="grid">
+          <property name="column">0</property>
+          <property name="padx">20</property>
+          <property name="pady">20</property>
+          <property name="row">0</property>
+        </layout>
+        <child>
+          <object class="ttk.Label" id="label_kalibrierung_title">
+            <property name="text" translatable="yes">Nullpunkt-Kalibrierung</property>
+            <layout manager="grid">
+              <property name="column">0</property>
+              <property name="columnspan">4</property>
+              <property name="padx">10</property>
+              <property name="pady">5 10</property>
+              <property name="row">0</property>
+              <property name="sticky">w</property>
+            </layout>
+          </object>
+        </child>
+        <child>
+          <object class="ttk.Label" id="label_kalibrierung_hinweis">
             <property name="text" translatable="yes">Falls sich der Tisch verschoben hat: Roboter per Jog exakt
 auf die vordere linke Tischecke (Tischhöhe) fahren, dann
 "Nullpunkt kalibrieren" drücken. Ohne Verschiebung einfach
 direkt "Weiter" drücken.</property>
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="columnspan">3</property>
-              <property name="padx">20</property>
-              <property name="pady">10</property>
+              <property name="columnspan">4</property>
+              <property name="padx">10</property>
+              <property name="pady">5 15</property>
               <property name="row">1</property>
+              <property name="sticky">w</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button23">
-            <property name="text" translatable="yes">x+</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">2</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button25">
-            <property name="text" translatable="yes">y+</property>
-            <layout manager="grid">
-              <property name="column">2</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">3</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button26">
-            <property name="text" translatable="yes">y-</property>
+          <object class="ttk.Labelframe" id="frame_jog_kalibrierung">
             <layout manager="grid">
               <property name="column">0</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">3</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button24">
-            <property name="text" translatable="yes">x-</property>
-            <layout manager="grid">
-              <property name="column">1</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">4</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button27">
-            <property name="text" translatable="yes">z+</property>
-            <layout manager="grid">
-              <property name="column">3</property>
+              <property name="columnspan">4</property>
               <property name="padx">10</property>
               <property name="pady">10</property>
               <property name="row">2</property>
+              <property name="sticky">nsew</property>
             </layout>
+            <child>
+              <object class="ttk.Button" id="button_toggle_jog_kalibrierung">
+                <property name="text" translatable="yes">▾ Manuelle Steuerung (Jog)</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">0</property>
+                  <property name="sticky">ew</property>
+                </layout>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Frame" id="frame_jog_controls_kalibrierung">
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="row">1</property>
+                  <property name="sticky">nsew</property>
+                </layout>
+                <child>
+                  <object class="ttk.Label" id="label_jog_xy_header_kalibrierung">
+                    <property name="text" translatable="yes">Ebene (X / Y)</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="columnspan">3</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_z_header_kalibrierung">
+                    <property name="text" translatable="yes">Höhe (Z)</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xplus_kalibrierung">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yminus_kalibrierung">
+                    <property name="text" translatable="yes">◀</property>
+                    <layout manager="grid">
+                      <property name="column">0</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_center_kalibrierung">
+                    <property name="text" translatable="yes">•</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_yplus_kalibrierung">
+                    <property name="text" translatable="yes">▶</property>
+                    <layout manager="grid">
+                      <property name="column">2</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">2</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_xminus_kalibrierung">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">1</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep_jog_kalibrierung">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">3</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zplus_kalibrierung">
+                    <property name="text" translatable="yes">▲</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_zminus_kalibrierung">
+                    <property name="text" translatable="yes">▼</property>
+                    <layout manager="grid">
+                      <property name="column">4</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Separator" id="sep2_jog_kalibrierung">
+                    <property name="orient">vertical</property>
+                    <layout manager="grid">
+                      <property name="column">5</property>
+                      <property name="padx">14</property>
+                      <property name="row">1</property>
+                      <property name="rowspan">3</property>
+                      <property name="sticky">ns</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Label" id="label_jog_rot_header_kalibrierung">
+                    <property name="text" translatable="yes">Drehung</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="pady">6 6</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotplus_kalibrierung">
+                    <property name="text" translatable="yes">⟳</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">1</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="ttk.Button" id="button_jog_rotminus_kalibrierung">
+                    <property name="text" translatable="yes">⟲</property>
+                    <layout manager="grid">
+                      <property name="column">6</property>
+                      <property name="padx">6</property>
+                      <property name="pady">4</property>
+                      <property name="row">3</property>
+                    </layout>
+                  </object>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="ttk.Label" id="label_position_readout_kalibrierung">
+                <property name="text" translatable="yes">TCP  x=+0.000  y=+0.000  z=+0.000 m   j6=+0.0°</property>
+                <layout manager="grid">
+                  <property name="column">0</property>
+                  <property name="columnspan">7</property>
+                  <property name="pady">10 0</property>
+                  <property name="row">2</property>
+                </layout>
+              </object>
+            </child>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button28">
-            <property name="text" translatable="yes">z-</property>
-            <layout manager="grid">
-              <property name="column">3</property>
-              <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">4</property>
-            </layout>
-          </object>
-        </child>
-        <child>
-          <object class="ttk.Button" id="button29">
+          <object class="ttk.Button" id="button_kalibrieren">
             <property name="command" type="command" cbtype="simple">on_kalibrieren_pressed</property>
             <property name="text" translatable="yes">Nullpunkt kalibrieren</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="columnspan">4</property>
               <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">5</property>
+              <property name="pady">15 5</property>
+              <property name="row">3</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>
         <child>
-          <object class="ttk.Button" id="button30">
+          <object class="ttk.Button" id="button_kalibrierung_weiter">
             <property name="command" type="command" cbtype="simple">on_kalibrierung_weiter_pressed</property>
-            <property name="text" translatable="yes">Weiter</property>
+            <property name="text" translatable="yes">Weiter ▸</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="columnspan">4</property>
               <property name="padx">10</property>
-              <property name="pady">10</property>
-              <property name="row">6</property>
+              <property name="pady">5</property>
+              <property name="row">4</property>
+              <property name="sticky">ew</property>
             </layout>
           </object>
         </child>

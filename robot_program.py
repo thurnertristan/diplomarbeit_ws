@@ -45,6 +45,34 @@ PROGRAMS_DIR = Path(__file__).resolve().parent / "programs"
 # angibt.
 DEFAULT_DWELL_S = 1.0
 
+# Sicherheitsfaktor auf die Gelenk-Geschwindigkeitsgrenze (siehe
+# sim.JOINT_VELOCITY_LIMIT_RAD_S) für die Reisezeit-Schätzung in
+# _min_settle_time - real wird die Grenzgeschwindigkeit erst nach einer
+# Beschleunigungsphase erreicht und vor dem Ziel wieder abgebremst, ein
+# Gelenk braucht für dieselbe Strecke also länger als delta/v_max.
+_TRAVEL_SPEED_SAFETY = 0.6
+
+# Zusätzliche Zeit nach der geschätzten Anfahrzeit, damit der PD-Regler nach
+# Erreichen der Grenzgeschwindigkeit noch abbremsen/einschwingen kann, bevor
+# der nächste Punkt gesendet wird (siehe JOINT_GAINS-Kommentar in
+# fr20_ceiling_gazebo.py - ohne diese Marge schoss der Arm bei grossen
+# Sprüngen >100° über den Zielwinkel hinaus).
+_SETTLE_MARGIN_S = 0.4
+
+
+def _min_settle_time(current: dict[str, float], target: dict[str, float]) -> float:
+    """Schätzt, wie lange das Gelenk mit der grössten Winkeländerung von
+    `current` nach `target` (rad - beide wie überall in diesem Modul) braucht,
+    inkl. Bremsmarge - siehe _TRAVEL_SPEED_SAFETY/_SETTLE_MARGIN_S oben."""
+    travel_s = 0.0
+    for joint, target_rad in target.items():
+        current_rad = current.get(joint, target_rad)
+        delta_rad = abs(target_rad - current_rad)
+        v_max = sim.JOINT_VELOCITY_LIMIT_RAD_S.get(joint)
+        if v_max:
+            travel_s = max(travel_s, delta_rad / (v_max * _TRAVEL_SPEED_SAFETY))
+    return travel_s + _SETTLE_MARGIN_S
+
 
 # ---------------------------------------------------------------------------
 # Datenmodell
@@ -203,12 +231,40 @@ def resolve_point(
     if primary is not None:
         candidates.append(primary)
 
-    # bei Bedarf mit alternativen Startstellungen weitere Lösungen suchen
+    # Ist die kontinuitätsnächste Primärlösung schon gefunden UND
+    # nachweislich sicher, sofort zurückgeben statt zusätzlich das ganze
+    # (teure) Fallback-Raster durchzurechnen - das kostete bei jedem Aufruf
+    # bis zu 8 weitere numerische IK-Läufe à 500 Iterationen inkl.
+    # Sweep-Sicherheitscheck, gemessen ca. 15-20s PRO Punkt (z.B. beim
+    # automatischen Anfahren des Kalibrierpunkts, das dadurch bei 3
+    # Wegpunkten fast eine Minute dauerte und in der GUI wie ein Hänger
+    # wirkte, obwohl primary die ganze Zeit schon eine gültige, sichere
+    # Lösung war). primary ist durch die Seedwahl bei current_joints_rad
+    # (siehe kin.inverse_kinematics) ohnehin praktisch immer die
+    # kontinuitätsnächste Lösung - das Fallback-Raster bleibt für die
+    # Fälle, in denen primary fehlschlägt oder unsicher ist.
+    if primary is not None and _is_transition_safe(current_joints_rad, primary):
+        return primary
+
+    # bei Bedarf mit alternativen Startstellungen weitere Lösungen suchen.
+    # max_iterations bewusst niedriger als der Standard (500) der primären
+    # IK oben: von den bis zu 20 Raster-Kombinationen (_FALLBACK_J1 x
+    # _FALLBACK_ELBOWS) konvergieren erfahrungsgemäß nur wenige überhaupt
+    # (der Rest sind schlicht ungültige/unerreichbare Startstellungen für
+    # DIESES Ziel) - eine tatsächlich konvergierende Lösung braucht dabei
+    # gemessen praktisch nie mehr als ~50 Iterationen, während ein
+    # nicht-konvergierender Versuch bei 500 Iterationen jedes Mal die
+    # vollen ca. 1.5s braucht, bevor er als gescheitert erkannt wird. Bei
+    # z.B. 13 von 20 fehlschlagenden Kombinationen (gemessen beim
+    # Kalibrierpunkt-Anfahren) macht allein das ~20s statt ~6s aus - genau
+    # das ließ die automatische Kalibrierfahrt wie eingefroren wirken,
+    # während Jog-Buttons währenddessen blockiert waren (siehe _jog).
+    _FALLBACK_MAX_ITERATIONS = 150
     if allow_fallback:
         for j1 in _FALLBACK_J1:
             for j2, j3, j4 in _FALLBACK_ELBOWS:
                 seed = dict(current_joints_rad, j1=j1, j2=j2, j3=j3, j4=j4)
-                sol = kin.inverse_kinematics(target, seed)
+                sol = kin.inverse_kinematics(target, seed, max_iterations=_FALLBACK_MAX_ITERATIONS)
                 if sol is not None:
                     candidates.append(sol)
                     if len(candidates) >= 8:  # genug Auswahl, nicht unnötig weitersuchen
@@ -462,12 +518,14 @@ def run_program(
                 if stopped():
                     print("Programm abgebrochen.")
                     return current
+                settle_s = _min_settle_time(current, target)
                 send(target)
                 current = target
                 if on_target_sent is not None:
                     on_target_sent(current)  # Aufrufer über neue Pose informieren
                 is_last = i == len(waypoints) - 1
-                _interruptible_sleep(point.dwell_s if is_last else 0.8, stop_event)
+                base_wait = point.dwell_s if is_last else 0.8
+                _interruptible_sleep(max(base_wait, settle_s), stop_event)
         if not loop or stopped():
             break
         print("Programm-Ende erreicht, starte erneut (--loop) ...")

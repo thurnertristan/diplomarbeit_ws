@@ -207,13 +207,39 @@ SAFE_TRAVEL_Z = 1.4
 # Gelenke tragen mehr Last (Eigengewicht des hängenden Arms, FR20 = 20kg
 # Traglast, deutlich schwerere Glieder als beim UR10e) und brauchen daher
 # höhere Gains, damit die Pose stabil gehalten wird.
+#
+# d_gain bewusst deutlich höher als eine reine "kritisch gedämpfte" Auslegung
+# nahelegen würde (Verhältnis d/p vorher ~0.05, jetzt ~0.12-0.15): Da
+# run_program() (siehe robot_program.py) den Zielwinkel als Sprung vorgibt
+# statt ihn sanft anzunähern, schwang der Arm bei den alten Gains sichtbar
+# über jeden Zielpunkt hinaus, bevor er sich einpendelte. Mehr Dämpfung
+# bremst dieses Überschwingen, auf Kosten einer minimal trägeren Annäherung.
 JOINT_GAINS = {
-    "j1": (6000, 0, 300),
-    "j2": (12000, 0, 600),
-    "j3": (6000, 0, 300),
-    "j4": (1000, 0, 40),
-    "j5": (1000, 0, 40),
-    "j6": (400, 0, 20),
+    "j1": (6000, 0, 950),
+    "j2": (12000, 0, 2200),
+    "j3": (6000, 0, 950),
+    "j4": (1000, 0, 120),
+    "j5": (1000, 0, 120),
+    "j6": (400, 0, 50),
+}
+
+# Geschwindigkeitsgrenzen der Gelenke (rad/s), wie in
+# fairino_description/urdf/fairino20_v6.urdf hinterlegt (<limit velocity=.../>).
+# robot_program.py nutzt das, um vor jedem Punkt genug Wartezeit einzuplanen
+# (siehe _min_settle_time dort) - bei den grossen Sprüngen zwischen zwei
+# Programmpunkten (teils >100°) reichte die frühere feste Wartezeit von
+# 0.8s/dwell_s nicht annähernd aus, damit das Gelenk die Strecke überhaupt
+# zurücklegen UND danach abbremsen konnte: effort-limitiert (150/28 Nm)
+# brauchte es bei voller Grenzgeschwindigkeit eine lange Bremsstrecke, das
+# Gelenk schoss dadurch messbar (>100°) über den Zielwinkel hinaus, bevor der
+# nächste Punkt kam (siehe Messung per JointStatePublisher-Topic).
+JOINT_VELOCITY_LIMIT_RAD_S = {
+    "j1": 3.15,
+    "j2": 3.15,
+    "j3": 3.15,
+    "j4": 3.2,
+    "j5": 3.2,
+    "j6": 3.2,
 }
 
 # Rohr-Rotationsachse (Motor + Getriebe, dreht das eingespannte Rohr
