@@ -300,6 +300,13 @@ def resolve_point(
     return candidates[0]
 
 
+HOME_POINT = Point(name="Nullpunkt", xyz=sim.CALIBRATION_REFERENCE_XYZ, dwell_s=0.0)
+"""Punkt, den run_program() (falls home_at_end=True) nach dem letzten
+Programmpunkt automatisch anfährt, bevor das Programm endet - derselbe
+Kalibrierpunkt wie build_calibration_program(), da er als einziger fester
+Referenzpunkt auf der Baugruppe bereits bekannt/erreichbar ist."""
+
+
 def build_calibration_program() -> Program:
     """Einzelnes Punktprogramm, das sim.CALIBRATION_REFERENCE_XYZ anfährt (den
     markanten Kalibrierpunkt auf der Baugruppe, siehe Kommentar dort) - wird
@@ -341,18 +348,24 @@ def calibrate_table_offset(current_joints_rad: dict[str, float]) -> tuple[float,
 # Programm ausführen
 # ---------------------------------------------------------------------------
 
-def _interruptible_sleep(seconds: float, stop_event: "threading.Event | None") -> None:
-    """Wie time.sleep(), kehrt aber sofort zurück, sobald stop_event gesetzt wird.
+def _interruptible_sleep(
+    seconds: float,
+    stop_event: "threading.Event | None",
+    abort_event: "threading.Event | None" = None,
+) -> None:
+    """Wie time.sleep(), kehrt aber sofort zurück, sobald stop_event oder
+    abort_event gesetzt wird (siehe _interrupted - definiert weiter unten,
+    zur Aufrufzeit aber bereits vorhanden).
 
     Wird gebraucht, damit ein per Button gestartetes Programm nicht erst die
     volle dwell_s eines Punkts abwarten muss, bevor ein Abbruch (z.B. durch
-    Klick auf einen anderen Programm-Button) greift.
+    Klick auf einen anderen Programm-Button oder auf 'Abbruch') greift.
     """
-    if stop_event is None:
+    if stop_event is None and abort_event is None:
         time.sleep(seconds)
         return
     deadline = time.time() + seconds
-    while time.time() < deadline and not stop_event.is_set():
+    while time.time() < deadline and not _interrupted(stop_event, abort_event):
         time.sleep(min(0.05, deadline - time.time()))
 
 
@@ -433,12 +446,66 @@ def _build_travel_waypoints(
     return [retract, travel, final]
 
 
-def _wait_while(event: "threading.Event | None", stop_event: "threading.Event | None") -> None:
+def _interrupted(stop_event: "threading.Event | None", abort_event: "threading.Event | None" = None) -> bool:
+    """True, sobald entweder der harte Stopp (`stop_event`, z.B. Programm
+    wird durch ein anderes abgelöst oder die GUI schließt - sofortiger
+    Abbruch OHNE Nullpunkt-Rückfahrt) oder der sanfte Abbruch (`abort_event`,
+    z.B. Button 'Abbruch' in der GUI - überspringt die restlichen
+    Programmpunkte, fährt aber noch den Nullpunkt an) gesetzt ist."""
+    return (stop_event is not None and stop_event.is_set()) or (
+        abort_event is not None and abort_event.is_set()
+    )
+
+
+def _wait_while(
+    event: "threading.Event | None",
+    stop_event: "threading.Event | None",
+    abort_event: "threading.Event | None" = None,
+) -> None:
     """Blockiert, solange `event` gesetzt ist (z.B. eine Pause), kehrt aber
-    sofort zurück, sobald `stop_event` gesetzt wird."""
+    sofort zurück, sobald stop_event ODER abort_event gesetzt wird (siehe
+    _interrupted)."""
     # kurzes Polling, bis Pause vorbei ist oder abgebrochen wird
-    while event is not None and event.is_set() and not (stop_event is not None and stop_event.is_set()):
+    while event is not None and event.is_set() and not _interrupted(stop_event, abort_event):
         time.sleep(0.1)
+
+
+def _wait_for_step(
+    step_event: "threading.Event | None",
+    stop_event: "threading.Event | None",
+    abort_event: "threading.Event | None" = None,
+    on_wait=None,
+) -> None:
+    """Einzelschrittbetrieb (Entwicklermodus, siehe gui/my_gui.py): blockiert,
+    bis `step_event` gesetzt wird (Bedienstand drückt "Nächster Punkt"), und
+    löscht es danach wieder, damit der übernächste Punkt erneut wartet.
+    `step_event=None` (Normalbetrieb) kehrt sofort zurück, ohne zu warten.
+    Kehrt außerdem sofort zurück, sobald stop_event oder abort_event gesetzt
+    wird (siehe _interrupted) - ein wartendes Einzelschrittprogramm darf
+    sich trotzdem abbrechen/zum Nullpunkt schicken lassen.
+
+    `on_wait` (optional) wird mit True aufgerufen, sobald tatsächlich zu
+    warten beginnt, und mit False, sobald das Warten endet (egal ob durch
+    step_event, stop_event oder abort_event) - Hook für die GUI, um den
+    "Nächster Punkt"-Button nur GENAU DANN aktiv zu schalten, wenn er auch
+    etwas bewirkt (siehe gui/my_gui.py: _set_naechster_punkt_enabled)."""
+    if step_event is None:
+        return
+    if step_event.is_set():
+        step_event.clear()  # schon gesetzt (z.B. Restzustand) - kein echtes Warten nötig
+        return
+    print("Einzelschrittbetrieb: warte auf 'Nächster Punkt' ...")
+    if on_wait is not None:
+        on_wait(True)
+    try:
+        while not step_event.is_set():
+            if _interrupted(stop_event, abort_event):
+                return
+            time.sleep(0.05)
+        step_event.clear()
+    finally:
+        if on_wait is not None:
+            on_wait(False)
 
 
 def run_program(
@@ -450,6 +517,10 @@ def run_program(
     current: dict[str, float] | None = None,
     get_current=None,
     on_target_sent=None,
+    home_at_end: bool = True,
+    step_event: "threading.Event | None" = None,
+    abort_event: "threading.Event | None" = None,
+    on_step_wait=None,
 ) -> dict[str, float]:
     """Fährt alle Punkte eines Programms nacheinander an.
 
@@ -484,6 +555,38 @@ def run_program(
     Fortschritt zusätzlich selbst mitverfolgen will (z.B. die GUI, um
     self._current_joints synchron zu halten).
 
+    `home_at_end` (Standard True): fährt nach dem letzten Programmpunkt
+    (bzw. bei loop=True erst nach dem Loop-Ende, bzw. bei einem Abbruch
+    über abort_event direkt danach) zusätzlich HOME_POINT (den
+    Nullpunkt/Kalibrierpunkt auf der Baugruppe) an, bevor die Funktion
+    zurückkehrt - "das Programm endet am Nullpunkt". Nur bei einem HARTEN
+    Stopp (stop_event, z.B. weil ein anderes Programm sofort übernimmt,
+    siehe gui/my_gui.py: _run_program_async) entfällt das, da der
+    zusätzliche Umweg dort nur stören würde. build_calibration_program()
+    selbst läuft mit home_at_end=False (siehe gui/my_gui.py), weil es
+    ohnehin schon genau dorthin fährt.
+
+    `step_event` (optional, Entwicklermodus-Einzelschrittbetrieb, siehe
+    gui/my_gui.py): ist es gesetzt (nicht None), wird vor JEDEM Punkt
+    (inkl. des abschließenden Nullpunkts, falls home_at_end) gewartet, bis
+    ein Bedienstand über den "Nächster Punkt"-Button `step_event` setzt -
+    im Gegensatz zu `pause_event` also nicht nur "anhalten", sondern
+    "genau einen Punkt weiterfahren und wieder anhalten".
+
+    `on_step_wait` (optional, siehe _wait_for_step): wird mit True/False
+    aufgerufen, sobald ein Einzelschritt-Warten beginnt/endet - Hook für
+    die GUI, um den "Nächster Punkt"-Button nur dann aktiv zu zeigen, wenn
+    er gerade wirklich etwas bewirkt.
+
+    `abort_event` (optional, sanfter Abbruch - Button 'Abbruch' in der GUI,
+    siehe on_abbruch_pressed): wird es gesetzt, werden die restlichen
+    Programmpunkte übersprungen, aber (anders als stop_event) noch der
+    Nullpunkt angefahren, BEVOR die Funktion zurückkehrt - "Abbruch endet
+    trotzdem sauber am Nullpunkt statt mitten in der Bewegung". Ein
+    zusätzlicher harter stop_event-Abbruch währenddessen (z.B. Ablösen
+    durch ein neues Programm) überstimmt das weiterhin sofort, ganz ohne
+    Nullpunkt-Rückfahrt.
+
     Gibt die zuletzt gesendete Gelenkpose zurück.
     """
     Double = sim.import_gz("msgs", "double_pb2").Double
@@ -503,32 +606,77 @@ def run_program(
     def stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
 
+    def aborted() -> bool:
+        return abort_event is not None and abort_event.is_set()
+
+    def drive_to(
+        point: Point,
+        current: dict[str, float],
+        abort_event: "threading.Event | None" = abort_event,
+    ) -> dict[str, float] | None:
+        """Fährt die Wegpunkte eines einzelnen Programmpunkts ab, gibt die
+        neue Pose zurück. Bei einem harten Stopp (stop_event) wird None
+        zurückgegeben (Aufrufer bricht komplett ab); bei einem sanften
+        Abbruch (abort_event) wird die zuletzt erreichte Pose zurückgegeben
+        (Aufrufer fährt stattdessen noch zum Nullpunkt). Für den
+        Nullpunkt-Anflug selbst wird abort_event=None übergeben (siehe
+        unten), damit ein bereits gesetztes abort_event diese letzte Fahrt
+        nicht ebenfalls sofort abbricht."""
+        if get_current is not None:
+            current = get_current()  # Position ggf. von außen auffrischen
+        print(f"-> Punkt '{point.name}'")
+        waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
+        for i, target in enumerate(waypoints):
+            _wait_while(pause_event, stop_event, abort_event)
+            if stopped():
+                print("Programm abgebrochen.")
+                return None
+            if abort_event is not None and abort_event.is_set():
+                return current
+            settle_s = _min_settle_time(current, target)
+            send(target)
+            current = target
+            if on_target_sent is not None:
+                on_target_sent(current)  # Aufrufer über neue Pose informieren
+            is_last = i == len(waypoints) - 1
+            base_wait = point.dwell_s if is_last else 0.8
+            _interruptible_sleep(max(base_wait, settle_s), stop_event, abort_event)
+        return current
+
     while True:  # nur relevant bei loop=True
         for point in program.points:
-            _wait_while(pause_event, stop_event)  # bei Pause anhalten
+            _wait_while(pause_event, stop_event, abort_event)  # bei Pause anhalten
             if stopped():
                 print("Programm abgebrochen.")
                 return current
-            if get_current is not None:
-                current = get_current()  # Position ggf. von außen auffrischen
-            print(f"-> Punkt '{point.name}'")
-            waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
-            for i, target in enumerate(waypoints):
-                _wait_while(pause_event, stop_event)
-                if stopped():
-                    print("Programm abgebrochen.")
-                    return current
-                settle_s = _min_settle_time(current, target)
-                send(target)
-                current = target
-                if on_target_sent is not None:
-                    on_target_sent(current)  # Aufrufer über neue Pose informieren
-                is_last = i == len(waypoints) - 1
-                base_wait = point.dwell_s if is_last else 0.8
-                _interruptible_sleep(max(base_wait, settle_s), stop_event)
-        if not loop or stopped():
+            if aborted():
+                break  # restliche Punkte überspringen, siehe Nullpunkt-Anflug unten
+            _wait_for_step(step_event, stop_event, abort_event, on_wait=on_step_wait)  # Einzelschrittbetrieb
+            if stopped():
+                print("Programm abgebrochen.")
+                return current
+            if aborted():
+                break
+            result = drive_to(point, current)
+            if result is None:
+                return current
+            current = result
+            if aborted():
+                break
+        if not loop or stopped() or aborted():
             break
         print("Programm-Ende erreicht, starte erneut (--loop) ...")
+
+    if home_at_end and not stopped() and program.points:
+        if aborted():
+            print("Abbruch: fahre noch zum Nullpunkt, danach Programmende.")
+            abort_event.clear()  # Rückfahrt selbst nicht mehr durch abort_event unterbrechen
+        _wait_for_step(step_event, stop_event, on_wait=on_step_wait)
+        if not stopped():
+            result = drive_to(HOME_POINT, current, abort_event=None)
+            if result is not None:
+                current = result
+                print("Programm beendet (Nullpunkt erreicht).")
 
     return current
 

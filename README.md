@@ -26,6 +26,14 @@ für die Werkzeugorientierung) oder eine direkte Gelenkpose (`joints` in
 Grad); pro Punkt lässt sich mit `dwell_s` die Wartezeit einstellen, bevor
 der nächste Punkt angefahren wird.
 
+Nach dem letzten Punkt eines Programms fährt der Roboter automatisch noch
+den Nullpunkt (`fr20_ceiling_gazebo.CALIBRATION_REFERENCE_XYZ`, derselbe
+Punkt wie bei der Nullpunkt-Kalibrierung) an, bevor das Programm endet
+(`robot_program.run_program(..., home_at_end=True)`, Standard). Wird ein
+Programm durch ein anderes abgelöst (z.B. Klick auf einen anderen
+Programm-Button in der GUI, während eins läuft), entfällt dieser
+Rückfahrtschritt.
+
 Eigene Programme = eigene JSON-Dateien im `programs/`-Ordner nach diesem
 Schema, ohne Code-Änderung nutzbar:
 

@@ -8,7 +8,7 @@ import traceback          # Fehler aus Hintergrund-Threads ausgeben
 
 import pygubu              # lädt die .ui-Oberfläche
 import tkinter as tk
-from tkinter import messagebox, ttk   # Dialoge und gestylte Widgets
+from tkinter import messagebox, simpledialog, ttk   # Dialoge und gestylte Widgets
 from PIL import Image, ImageTk         # Bilder laden/skalieren
 
 PROJECT_PATH = pathlib.Path(__file__).parent
@@ -43,6 +43,11 @@ ZOOM_OPTIONS = {"100%": 1.0, "125%": 1.25, "150%": 1.5}
 # Tcl/Tk-Basis-Skalierung bei 100% (typischer Wert für 96dpi-Bildschirme) -
 # ZOOM_OPTIONS-Faktoren werden hierauf multipliziert (siehe _on_zoom_selected).
 BASE_TK_SCALING = 1.3333
+
+# Passwort für den Entwicklermodus (siehe on_entwicklermodus_toggle_pressed) -
+# kein echter Sicherheitsmechanismus, nur ein Schutz vor versehentlichem
+# Aktivieren (Einzelschrittbetrieb u.ä. sind nichts für den Normalbetrieb).
+DEV_MODE_PASSWORD = "bensen"
 
 
 class _StdoutTee:
@@ -148,6 +153,26 @@ class MyApp:
         # die Jog-Buttons den Roboter bewegen, ohne dass das Programm
         # gleichzeitig weiterläuft und sich mit ihnen in die Quere kommt.
         self._pause_event = threading.Event()
+
+        # Gesetzt = sanfter Abbruch (siehe on_abbruch_pressed sowie
+        # robot_program.run_program's abort_event): anders als
+        # self._stop_event (harter, sofortiger Stopp z.B. beim Ablösen
+        # durch ein anderes Programm oder beim Schließen der GUI, siehe
+        # _stop_running_program) überspringt das nur die restlichen
+        # Programmpunkte und lässt den Roboter zuerst noch zum Nullpunkt
+        # fahren, bevor das Programm tatsächlich endet.
+        self._abort_event = threading.Event()
+
+        # Entwicklermodus (siehe on_entwicklermodus_toggle_pressed, Passwort
+        # DEV_MODE_PASSWORD) + Einzelschrittbetrieb darin (siehe
+        # on_einzelschritt_toggled/on_naechster_punkt_pressed). Gesetzt =
+        # der laufende Programm-Worker wartet vor jedem Punkt auf
+        # self._step_event (siehe robot_program.run_program's step_event)
+        # statt direkt weiterzufahren - anders als _pause_event (komplett
+        # anhalten) hier "genau einen Punkt weiterfahren und wieder warten".
+        self._dev_mode = False
+        self._single_step_var = tk.BooleanVar(value=False)
+        self._step_event = threading.Event()
 
         # after()-Job-ID der laufenden Jog-Wiederholung (siehe _hold_jog/
         # _release_jog) - None, solange kein Jog-Button gehalten wird.
@@ -446,24 +471,46 @@ class MyApp:
             print("Gazebo bereit.")
             return self._publishers
 
-    def _stop_running_program(self) -> bool:
-        """Bricht ein evtl. gerade laufendes Punktprogramm ab und wartet,
-        bis der Worker-Thread beendet ist - der gemeinsame Kern hinter
-        on_abbruch_pressed, on_kalibrierung_weiter_pressed, on_close und dem
-        Ablöse-Schritt in _run_program_async. Hebt eine evtl. aktive Pause
-        zuerst auf, damit run_program() nicht dort auf das gleich folgende
-        stop_event wartet, statt sofort abzubrechen (siehe _wait_while in
-        robot_program.py). Gibt True zurück, wenn tatsächlich ein Programm
-        lief und gestoppt wurde - False, wenn ohnehin nichts lief."""
+    def _stop_running_program(self, graceful: bool = False) -> bool:
+        """Bricht ein evtl. gerade laufendes Punktprogramm ab - der
+        gemeinsame Kern hinter on_abbruch_pressed, on_kalibrierung_weiter_pressed,
+        on_close und dem Ablöse-Schritt in _run_program_async. Hebt eine evtl.
+        aktive Pause zuerst auf, damit run_program() nicht dort auf das
+        gleich folgende Abbruch-Signal wartet, statt sofort zu reagieren
+        (siehe _wait_while in robot_program.py). Gibt True zurück, wenn
+        tatsächlich ein Programm lief und abgebrochen wurde - False, wenn
+        ohnehin nichts lief.
+
+        `graceful=False` (Standard, harter Stopp über self._stop_event):
+        bricht SOFORT ab, ohne Nullpunkt-Rückfahrt - richtig zum Ablösen
+        durch ein neues Programm oder beim Schließen der GUI, wo ein
+        zusätzlicher Umweg nur stören würde. Wartet hier auf das
+        Thread-Ende (join), da der Aufrufer i.d.R. direkt danach selbst
+        etwas an denselben Publishern sendet.
+
+        `graceful=True` (button 'Abbruch', siehe on_abbruch_pressed): setzt
+        stattdessen self._abort_event (siehe robot_program.run_program's
+        abort_event) - der Worker-Thread überspringt die restlichen
+        Programmpunkte, fährt aber noch zum Nullpunkt, bevor er sich ganz
+        normal beendet (inkl. des schon bestehenden on_done-Callbacks, der
+        z.B. window_programm wieder schließt). Kein join() hier - das
+        würde die GUI für die gesamte Nullpunkt-Rückfahrt einfrieren."""
         if self._program_thread is None or not self._program_thread.is_alive():
             return False
-        # Pause aufheben, dann abbrechen und auf das Thread-Ende warten
         self._pause_event.clear()
-        self._stop_event.set()
-        self._program_thread.join(timeout=5.0)
+        if graceful:
+            self._abort_event.set()
+        else:
+            self._stop_event.set()
+            self._program_thread.join(timeout=5.0)
         return True
 
-    def _run_program_async(self, program_source: "pathlib.Path | rp.Program", on_done=None) -> None:
+    def _run_program_async(
+        self,
+        program_source: "pathlib.Path | rp.Program",
+        on_done=None,
+        home_at_end: bool = True,
+    ) -> None:
         """Startet ein Punktprogramm (siehe robot_program.py) in einem eigenen
         Thread, damit die GUI währenddessen bedienbar bleibt.
 
@@ -493,7 +540,14 @@ class MyApp:
 
         stop_event = threading.Event()
         self._stop_event = stop_event
+        abort_event = threading.Event()
+        self._abort_event = abort_event
         self._pause_event.clear()  # ein neu gestartetes Programm startet nie pausiert
+        self._step_event.clear()  # ein neu gestartetes Programm wartet nicht sofort
+
+        # nur im Entwicklermodus MIT aktiviertem Einzelschrittbetrieb wird
+        # tatsächlich vor jedem Punkt gewartet (siehe robot_program.run_program).
+        step_event = self._step_event if (self._dev_mode and self._single_step_var.get()) else None
 
         def get_current() -> dict:
             with self._pose_lock:
@@ -502,6 +556,9 @@ class MyApp:
         def set_current(target: dict) -> None:
             with self._pose_lock:
                 self._current_joints = target
+
+        def set_step_waiting(waiting: bool) -> None:
+            self.mainwindow.after(0, lambda: self._set_naechster_punkt_enabled(waiting))
 
         def worker() -> None:
             program_name = "?"
@@ -518,10 +575,14 @@ class MyApp:
                     program,
                     publishers,
                     stop_event=stop_event,
+                    abort_event=abort_event,
                     pause_event=self._pause_event,
                     current=get_current(),
                     get_current=get_current,
                     on_target_sent=set_current,
+                    home_at_end=home_at_end,
+                    step_event=step_event,
+                    on_step_wait=set_step_waiting,
                 )
                 if not stop_event.is_set():
                     print(f"Programm '{program.name}' beendet.")
@@ -752,19 +813,40 @@ class MyApp:
 
     def on_abbruch_pressed(self):
         """Button 'Abbruch' (button_abbruch, nur in window_programm
-        gebunden): bricht ein laufendes Punktprogramm sofort und endgültig
-        ab (nicht nur pausieren) - Gazebo bleibt dabei offen.
-        `_run_program_async`'s `on_done` (back_to_main) wird bei einem
-        Abbruch bewusst NICHT aufgerufen (siehe dortiger Kommentar zu
-        stop_event), daher hier zusätzlich window_programm verstecken und
-        das Hauptfenster wieder zeigen - sonst bliebe der Nutzer nach
-        "Abbruch" im leeren window_programm stecken."""
-        if not self._stop_running_program():
+        gebunden): bricht beim ERSTEN Klick die restlichen Programmpunkte ab
+        (nicht nur pausieren), lässt den Roboter aber zuerst noch zum
+        Nullpunkt fahren, bevor das Programm endet (siehe
+        _stop_running_program(graceful=True) sowie robot_program.run_program's
+        abort_event) - Gazebo bleibt dabei offen.
+
+        Anders als beim harten Stopp (self._stop_event, z.B. beim Ablösen
+        durch ein neues Programm) wird `_run_program_async`'s `on_done`
+        (bei Figur-Programmen: back_to_main) hier GANZ NORMAL aufgerufen,
+        sobald der Worker-Thread die Nullpunkt-Rückfahrt beendet hat - kein
+        eigenes Verstecken/Zeigen der Fenster nötig, das übernimmt back_to_main
+        wie bei einem normal durchgelaufenen Programm auch.
+
+        Ein ZWEITER Klick, während diese Nullpunkt-Rückfahrt noch läuft
+        (self._abort_event bereits gesetzt), eskaliert zum sofortigen harten
+        Stopp (graceful=False) - für den Fall, dass der Bedienstand den
+        Roboter JETZT anhalten will und nicht erst nach der Rückfahrt zum
+        Nullpunkt warten kann. Dabei bleibt kein on_done-Aufruf mehr übrig
+        (siehe _run_program_async - bei stop_event wird on_done bewusst
+        übersprungen), daher hier wie früher manuell window_programm
+        verstecken und das Hauptfenster zeigen."""
+        if self._program_thread is None or not self._program_thread.is_alive():
             print("Kein Programm läuft gerade - Abbruch hat nichts zu tun.")
             return
-        print("Programm abgebrochen.")
-        self.window_programm.withdraw()
-        self.mainwindow.deiconify()
+
+        if self._abort_event.is_set():
+            print("Abbruch erneut gedrückt - Sofort-Stopp (keine Nullpunkt-Rückfahrt mehr).")
+            self._stop_running_program()  # graceful=False: harter, sofortiger Stopp
+            self.window_programm.withdraw()
+            self.mainwindow.deiconify()
+            return
+
+        self._stop_running_program(graceful=True)
+        print("Abbruch angefordert - Roboter fährt noch zum Nullpunkt, danach endet das Programm.")
 
     def _open_calibration_window(self):
         """Öffnet das Kalibrierungs-Fenster (window_kalibrierung) - einmalig
@@ -859,8 +941,16 @@ class MyApp:
         nicht-unterbrechbarer Sonderfall mit einem eigenen, losgelösten
         Thread zu laufen (der z.B. beim Wechsel auf 'Figur1' mitten in der
         Kalibrierfahrt hängen bliebe und dessen Gelenkbefehle sich dann mit
-        denen des neuen Programms überschneiden würden)."""
-        self._run_program_async(rp.build_calibration_program(), on_done=self._confirm_and_calibrate)
+        denen des neuen Programms überschneiden würden).
+
+        home_at_end=False: der Kalibrierpunkt IST bereits der Nullpunkt, ein
+        automatisches Nachfahren dorthin (siehe robot_program.run_program)
+        wäre hier nur ein unnötiger Zusatzschritt."""
+        self._run_program_async(
+            rp.build_calibration_program(),
+            on_done=self._confirm_and_calibrate,
+            home_at_end=False,
+        )
 
     def _confirm_and_calibrate(self) -> None:
         """Zweiter Teil von on_kalibrieren_pressed, nachdem der Roboter den
@@ -930,6 +1020,12 @@ class MyApp:
             self._style_widget("button_pause", "Warning.TButton")
             self._style_widget("button_weiter_programm", "Success.TButton")
             self._style_widget("button_abbruch", "Danger.TButton")
+            self._style_widget("button_naechster_punkt", "Primary.TButton")
+            # startet deaktiviert - wird erst per on_step_wait-Callback aktiv
+            # (siehe _set_naechster_punkt_enabled/_run_program_async), wenn
+            # der Worker tatsächlich auf 'Nächster Punkt' wartet, statt
+            # dauerhaft klickbar (aber wirkungslos) zu sein.
+            self.builder.get_object("button_naechster_punkt", self.mainwindow).state(["disabled"])
             self._make_responsive(self.window_programm, self.builder.get_object("frame_programm"))
             self._fit_window_to_screen(self.window_programm)
         else:
@@ -1022,6 +1118,19 @@ class MyApp:
                 text="☀ Helles Design" if self._dark_mode else "🌙 Dunkles Design",
             )
 
+            # Entwicklermodus (siehe on_entwicklermodus_toggle_pressed) -
+            # Checkbutton startet deaktiviert, solange der Entwicklermodus
+            # selbst noch nicht per Passwort freigeschaltet wurde.
+            self._style_widget("frame_entwicklermodus", "Card.TLabelframe")
+            self._style_widget(
+                "button_entwicklermodus_toggle",
+                "Secondary.TButton",
+                text="🔧 Entwicklermodus deaktivieren" if self._dev_mode else "🔧 Entwicklermodus aktivieren",
+            )
+            checkbutton_einzelschritt = self.builder.get_object("checkbutton_einzelschritt", self.mainwindow)
+            checkbutton_einzelschritt.configure(variable=self._single_step_var)
+            checkbutton_einzelschritt.state(["!disabled"] if self._dev_mode else ["disabled"])
+
             self._make_responsive(self.window_optionen, self.builder.get_object("frame_optionen"))
             self._fit_window_to_screen(self.window_optionen)
         else:
@@ -1075,6 +1184,84 @@ class MyApp:
             "Secondary.TButton",
             text="☀ Helles Design" if self._dark_mode else "🌙 Dunkles Design",
         )
+
+    def on_entwicklermodus_toggle_pressed(self):
+        """Button 'Entwicklermodus aktivieren/deaktivieren' in
+        window_optionen: zum Aktivieren muss DEV_MODE_PASSWORD eingegeben
+        werden (simpledialog.askstring mit show='*', kein echter
+        Sicherheitsmechanismus - nur ein Schutz vor versehentlichem
+        Aktivieren). Deaktivieren braucht kein Passwort.
+
+        Deaktivieren schaltet auch den Einzelschrittbetrieb (siehe
+        on_einzelschritt_toggled) mit ab und gibt ein evtl. gerade
+        wartendes Programm sofort frei (self._step_event.set()) - sonst
+        bliebe ein laufendes Programm, das im Einzelschrittbetrieb gerade
+        auf 'Nächster Punkt' wartet, nach dem Verlassen des
+        Entwicklermodus für immer hängen, da der Button dafür dann nicht
+        mehr bedienbar ist."""
+        if not self._dev_mode:
+            pw = simpledialog.askstring(
+                "Entwicklermodus",
+                "Passwort eingeben:",
+                show="*",
+                parent=self.window_optionen,
+            )
+            if pw != DEV_MODE_PASSWORD:
+                if pw is not None:  # None = Dialog abgebrochen, keine Meldung nötig
+                    messagebox.showerror("Entwicklermodus", "Falsches Passwort.")
+                return
+            self._dev_mode = True
+            print("Entwicklermodus aktiviert.")
+        else:
+            self._dev_mode = False
+            self._single_step_var.set(False)
+            self._step_event.set()  # evtl. wartendes Programm freigeben
+            print("Entwicklermodus deaktiviert.")
+
+        self._style_widget(
+            "button_entwicklermodus_toggle",
+            "Secondary.TButton",
+            text="🔧 Entwicklermodus deaktivieren" if self._dev_mode else "🔧 Entwicklermodus aktivieren",
+        )
+        checkbutton = self.builder.get_object("checkbutton_einzelschritt", self.mainwindow)
+        checkbutton.state(["!disabled"] if self._dev_mode else ["disabled"])
+
+    def on_einzelschritt_toggled(self):
+        """Checkbutton 'Einzelschrittbetrieb' in window_optionen (nur im
+        Entwicklermodus bedienbar, siehe on_entwicklermodus_toggle_pressed):
+        self._single_step_var wird von _run_program_async beim nächsten
+        Programmstart gelesen (siehe dortiges step_event). Wird es
+        WÄHREND ein Programm bereits darauf wartet ausgeschaltet, gibt
+        self._step_event.set() dieses Warten sofort frei, statt den
+        Roboter bis zum nächsten Klick auf 'Nächster Punkt' stehen zu
+        lassen."""
+        if not self._single_step_var.get():
+            self._step_event.set()
+        print(f"Einzelschrittbetrieb: {'ein' if self._single_step_var.get() else 'aus'}")
+
+    def on_naechster_punkt_pressed(self):
+        """Button 'Nächster Punkt' in window_programm (nur im
+        Einzelschrittbetrieb relevant): gibt den aktuell wartenden Punkt
+        frei (siehe robot_program.run_program's step_event/_wait_for_step).
+        Ohne aktives Warten ist der Klick wirkungslos (das Event wird beim
+        nächsten Punkt ohnehin sofort wieder gebraucht/gelöscht)."""
+        self._step_event.set()
+
+    def _set_naechster_punkt_enabled(self, enabled: bool) -> None:
+        """Schaltet den 'Nächster Punkt'-Button (nur) genau dann aktiv, wenn
+        robot_program.run_program gerade wirklich darauf wartet (siehe
+        dessen on_step_wait-Callback, hier in _run_program_async verdrahtet)
+        - sonst bliebe er dauerhaft klickbar, obwohl ein Klick oft
+        wirkungslos wäre (z.B. während der Roboter noch zum vorherigen
+        Punkt unterwegs ist). Wird über mainwindow.after(0, ...) auf den
+        Tkinter-Hauptthread umgeleitet, da der Aufrufer (Programm-Worker)
+        in einem Hintergrund-Thread läuft. Tut nichts, falls window_programm
+        noch gar nicht gebaut wurde (z.B. bei Gelenkpose/Tisch, die nicht
+        über window_programm laufen)."""
+        if getattr(self, "window_programm", None) is None:
+            return
+        button = self.builder.get_object("button_naechster_punkt", self.mainwindow)
+        button.state(["!disabled"] if enabled else ["disabled"])
 
     def _on_log_line(self, text: str) -> None:
         """Wird von _StdoutTee bei JEDEM print()/stdout-Write aufgerufen -
