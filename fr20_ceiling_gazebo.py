@@ -119,21 +119,12 @@ TABLE_SIZE_XY = (
     ASSEMBLY_SIZE_XY_M[1] + 2 * TABLE_MARGIN_M + 2 * TABLE_END_OVERHANG_M,
 )
 
-# Referenzpunkt für die Nullpunkt-Kalibrierung (siehe load_table_offset()/
-# save_table_offset() unten sowie GUI-Button "Nullpunkt kalibrieren"): ein
-# markanter Punkt auf der Baugruppe selbst (ihre Bounding-Box-Mitte) statt
-# einer bloßen Tischkante - eindeutig wiederzufinden statt einer
-# unspezifischen Kante. Die Baugruppen-Mitte liegt fast exakt auf der
-# Mount-Achse des Roboters (Totzone von ca. 0.3 m Radius, siehe Kommentar bei
-# LOOK_AT_TABLE_POSE, dort ist die IK ebenfalls nicht lösbar), daher der
-# gleiche Versatz von 0.3/-0.1 m wie bei LOOK_AT_TABLE_POSE. robot_program.py
-# fährt diesen Punkt beim Kalibrieren automatisch per IK an (siehe
-# robot_program.build_calibration_program) - der Nutzer justiert von dort nur
-# noch per Jog fein nach, statt komplett manuell hinzufahren zu müssen.
-# Rutscht die Baugruppe, wird die Differenz zwischen dieser Soll-Position und
-# der tatsächlich angetasteten Ist-Position als TABLE_OFFSET gespeichert und
-# danach auf alle kartesischen Programmpunkte addiert (siehe
-# robot_program.resolve_point).
+# Referenzpunkt für die Nullpunkt-Kalibrierung: ein markanter Punkt auf der
+# Baugruppe selbst (ihre Bounding-Box-Mitte), eindeutig wiederzufinden.
+# Liegt fast auf der Mount-Achse des Roboters (IK-Totzone, siehe
+# LOOK_AT_TABLE_POSE), daher derselbe Versatz von 0.3/-0.1 m. Rutscht die
+# Baugruppe, wird die Differenz zur tatsächlich angetasteten Position als
+# TABLE_OFFSET gespeichert und auf alle kartesischen Programmpunkte addiert.
 CALIBRATION_REFERENCE_XYZ = (
     TABLE_CENTER[0] - ASSEMBLY_XY_OFFSET_M[0] + 0.3,
     TABLE_CENTER[1] - ASSEMBLY_XY_OFFSET_M[1] - 0.1,
@@ -141,10 +132,7 @@ CALIBRATION_REFERENCE_XYZ = (
 )
 
 # Persistierter Tisch-Offset (dx, dy, dz in m) aus der letzten Kalibrierung -
-# siehe load_table_offset()/save_table_offset(). Bewusst eine eigene Datei
-# statt eines Werts im Code, damit eine Kalibrierung nicht bei jedem
-# Programmstart neu recherchiert/eingetragen werden muss und über GUI-Starts
-# hinweg erhalten bleibt.
+# eigene Datei statt Wert im Code, damit er über GUI-Starts hinweg erhalten bleibt.
 TABLE_OFFSET_PATH = REPO_ROOT / "table_offset.json"
 
 # Gelenkreihenfolge, wie sie fairino_description für den FR20 verwendet
@@ -153,16 +141,13 @@ TABLE_OFFSET_PATH = REPO_ROOT / "table_offset.json"
 JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
 
 # Pose, in der der Endeffektor (tool0) senkrecht von der Decke auf die
-# Tischmitte herabschaut. Per IK aus fr20_kinematics berechnet und gegen
-# die realen FR20-Gelenkgrenzen validiert.
+# Tischmitte herabschaut. Per IK aus fr20_kinematics berechnet.
 #
-# Zielpunkt bewusst NICHT exakt TABLE_CENTER (0, 0, 1.05): das liegt genau
-# auf der j1-Rotationsachse (Basis hängt direkt über TABLE_CENTER), eine
-# kinematische Singularität, für die die IK keine Lösung findet - zusätzlich
-# gibt es um diese Achse herum eine reale Reichweiten-Totzone von ca. 0.3 m
-# Radius (Armgeometrie kommt geometrisch nicht näher heran, unabhängig von
-# den Gelenkgrenzen). Der Zielpunkt liegt daher 0.3/-0.1 m neben der Mitte -
-# visuell weiterhin "an der Tischmitte", aber IK-lösbar.
+# Zielpunkt bewusst NICHT exakt TABLE_CENTER: das liegt genau auf der
+# j1-Rotationsachse - eine kinematische Singularität ohne IK-Lösung, plus
+# eine reale Reichweiten-Totzone von ca. 0.3 m Radius um diese Achse. Der
+# Zielpunkt liegt daher 0.3/-0.1 m neben der Mitte - visuell weiterhin "an
+# der Tischmitte", aber IK-lösbar.
 LOOK_AT_TABLE_POSE = {
     "j1": 0.87427,
     "j2": -0.95155,
@@ -173,16 +158,11 @@ LOOK_AT_TABLE_POSE = {
 }
 
 # gz-sim spawnt den Roboter physikalisch immer in der URDF-Null-Stellung
-# (alle Gelenke 0), unabhängig davon, welche Pose als "aktuelle" Pose im
-# Python-Code angenommen wird. Bei Null-Stellung liegt der Arm gestreckt bei
-# r=1.72 m/z=1.92 m (sicher, weit über/neben dem Tisch) - ein direkter Sprung
-# von dort zu LOOK_AT_TABLE_POSE lässt Unterarm/Handgelenk aber mitten durch
-# den Tisch schwingen (per Sweep-Analyse über fr20_kinematics verifiziert:
-# Radius<0.45 m UND Höhe<0.75 m gleichzeitig, unabhängig von TABLE_MARGIN_M).
-# SAFE_STAGING_POSE ist eine Zwischenpose, für die sowohl "Null -> hier" als
-# auch "hier -> LOOK_AT_TABLE_POSE" kollisionsfrei sind (ebenfalls per Sweep
-# verifiziert) - jeder Ablauf (CLI, GUI-Buttons, robot_program.py) fährt sie
-# zuerst an, bevor irgendein eigentliches Programm/Zielpunkt gesendet wird.
+# (alle Gelenke 0), unabhängig von der im Python-Code angenommenen "aktuellen"
+# Pose. Ein direkter Sprung von dort zu LOOK_AT_TABLE_POSE lässt Unterarm/
+# Handgelenk mitten durch den Tisch schwingen. SAFE_STAGING_POSE ist eine
+# Zwischenpose, für die sowohl "Null -> hier" als auch "hier ->
+# LOOK_AT_TABLE_POSE" kollisionsfrei sind - jeder Ablauf fährt sie zuerst an.
 SAFE_STAGING_POSE = {
     "j1": 0.87400,
     "j2": 0.00000,
@@ -193,27 +173,19 @@ SAFE_STAGING_POSE = {
 }
 
 # Höhe, auf die robot_program.py beim Wechsel zwischen zwei kartesischen
-# Punkten zurückzieht, bevor seitlich verfahren wird (siehe run_program in
-# robot_program.py). Grund: Zwei für sich genommen sichere Punkte können
-# unterschiedliche Ellbogen-Konfigurationen brauchen - die reine
-# Gelenkraum-Interpolation zwischen ihnen schwingt dann oft tief durch den
-# Tisch, obwohl Start und Ziel beide sicher über der Tischplatte liegen
-# (siehe programs/beispiel_figur.json, mehrfach per Sweep-Analyse
-# nachgewiesen). Deutlich über TABLE_TOP_Z, damit auch bei einem
-# Ellbogen-Wechsel während des seitlichen Verfahrens genug Abstand bleibt.
+# Punkten zurückzieht, bevor seitlich verfahren wird - zwei sichere Punkte
+# können unterschiedliche Ellbogen-Konfigurationen brauchen, die reine
+# Gelenkraum-Interpolation zwischen ihnen schwingt dann oft durch den Tisch.
+# Deutlich über TABLE_TOP_Z, damit auch bei einem Ellbogen-Wechsel genug
+# Abstand bleibt.
 SAFE_TRAVEL_Z = 1.4
 
 # PID-Gains für die gz-sim JointPositionController-Plugins. Die schulternahen
-# Gelenke tragen mehr Last (Eigengewicht des hängenden Arms, FR20 = 20kg
-# Traglast, deutlich schwerere Glieder als beim UR10e) und brauchen daher
-# höhere Gains, damit die Pose stabil gehalten wird.
-#
-# d_gain bewusst deutlich höher als eine reine "kritisch gedämpfte" Auslegung
-# nahelegen würde (Verhältnis d/p vorher ~0.05, jetzt ~0.12-0.15): Da
-# run_program() (siehe robot_program.py) den Zielwinkel als Sprung vorgibt
-# statt ihn sanft anzunähern, schwang der Arm bei den alten Gains sichtbar
-# über jeden Zielpunkt hinaus, bevor er sich einpendelte. Mehr Dämpfung
-# bremst dieses Überschwingen, auf Kosten einer minimal trägeren Annäherung.
+# Gelenke tragen mehr Last (Eigengewicht des hängenden Arms, 20kg Traglast)
+# und brauchen daher höhere Gains, damit die Pose stabil gehalten wird.
+# d_gain ist bewusst hoch angesetzt, da run_program() den Zielwinkel als
+# Sprung vorgibt statt ihn sanft anzunähern - mehr Dämpfung bremst das
+# Überschwingen, auf Kosten einer etwas trägeren Annäherung.
 JOINT_GAINS = {
     "j1": (6000, 0, 950),
     "j2": (12000, 0, 2200),
@@ -224,15 +196,10 @@ JOINT_GAINS = {
 }
 
 # Geschwindigkeitsgrenzen der Gelenke (rad/s), wie in
-# fairino_description/urdf/fairino20_v6.urdf hinterlegt (<limit velocity=.../>).
-# robot_program.py nutzt das, um vor jedem Punkt genug Wartezeit einzuplanen
-# (siehe _min_settle_time dort) - bei den grossen Sprüngen zwischen zwei
-# Programmpunkten (teils >100°) reichte die frühere feste Wartezeit von
-# 0.8s/dwell_s nicht annähernd aus, damit das Gelenk die Strecke überhaupt
-# zurücklegen UND danach abbremsen konnte: effort-limitiert (150/28 Nm)
-# brauchte es bei voller Grenzgeschwindigkeit eine lange Bremsstrecke, das
-# Gelenk schoss dadurch messbar (>100°) über den Zielwinkel hinaus, bevor der
-# nächste Punkt kam (siehe Messung per JointStatePublisher-Topic).
+# fairino_description/urdf/fairino20_v6.urdf hinterlegt. robot_program.py
+# nutzt das, um vor jedem Punkt genug Wartezeit einzuplanen (siehe
+# _min_settle_time dort), damit ein Gelenk bei großen Sprüngen die Strecke
+# zurücklegen und abbremsen kann, statt über den Zielwinkel zu schießen.
 JOINT_VELOCITY_LIMIT_RAD_S = {
     "j1": 3.15,
     "j2": 3.15,
@@ -259,20 +226,11 @@ TUBE_ROTATION_JOINT_NAME = "rotate"
 TUBE_ROTATION_EFFORT_NM = 150.0
 TUBE_ROTATION_VELOCITY_RAD_S = 1.0
 
-# TUBE_ROTATION_INERTIA_YY_KGM2 ist die angenommene Trägheit der Welle um
-# ihre eigene (Y-)Achse - siehe build_tube_rotation_model_sdf(). Bewusst
-# deutlich höher als eine dünne Platzhalter-Welle physisch hätte: bei den
-# ersten Tests mit einer sehr leichten Welle (0.002 kg*m^2) hat der
-# Regler das Gelenk innerhalb weniger Schritte in den effort-Anschlag
-# (150 Nm) gefahren - bei so kleiner Trägheit bedeutet das eine
-# Winkelbeschleunigung von >70000 rad/s^2, die GAINS unten in eine
-# aufschaukelnde Schwingung statt einer sauberen Annäherung trieb (per
-# gz-topic-Messung an /world/.../pose/info nachgewiesen: der Winkel schoss
-# über 90° hinaus bis über 200° und zurück, statt sich einzupendeln).
-# 0.05 kg*m^2 entspricht ungefähr einem realen Spannfutter+Welle+Getriebe
-# und hält die nötigen Drehmomente bei GAINS unten weit unter dem
-# effort-Limit (siehe Rechnung: p_gain * pi rad ≈ 5.7 Nm << 150 Nm) -
-# dadurch bleibt der Regler im linearen, gut gedämpften Bereich.
+# Angenommene Trägheit der Welle um ihre eigene (Y-)Achse - deutlich höher
+# als eine dünne Platzhalter-Welle physisch hätte: bei zu kleiner Trägheit
+# treibt der Regler das Gelenk in eine aufschaukelnde Schwingung statt einer
+# sauberen Annäherung. 0.05 kg*m^2 entspricht ungefähr einem realen
+# Spannfutter+Welle+Getriebe und hält den Regler im linearen, gedämpften Bereich.
 TUBE_ROTATION_INERTIA_YY_KGM2 = 0.05
 TUBE_ROTATION_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für TUBE_ROTATION_INERTIA_YY_KGM2
 
@@ -283,17 +241,12 @@ TUBE_ROTATION_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für TUBE_RO
 TUBE_ROTATION_SHAFT_LENGTH_M = 0.4
 
 # Position der Achse: neben dem Tisch, am Ende der Baugruppe entlang ihrer
-# langen Achse (Y-Richtung, siehe ASSEMBLY_SIZE_XY_M) - dort, wo ein
-# Spannfutter das Rohr fassen und drehen würde. Der Y-Abstand zur Tischkante
-# ist bewusst größer als TUBE_ROTATION_SHAFT_LENGTH_M: eine erste Version
-# mit nur 0.1 m Abstand ließ die Welle ins Kollisionsvolumen des Tisches
-# hineinragen (Welle und Tisch überlappten sich bei gleicher Höhe) - die
-# Physik-Engine erzeugte dadurch bei jedem Zeitschritt Kontaktkräfte, die
-# das Gelenk unkontrolliert durchdrehen ließen (per gz-topic-Messung an
-# /world/.../pose/info nachgewiesen: der Winkel sprang chaotisch zwischen
-# -94° und 208°, statt sich auf das Zielgelenk einzupendeln - keine
-# Regler-Instabilität, sondern eine echte Kollision). Z liegt etwas über
-# TABLE_TOP_Z aus demselben Grund (keine Überlappung mit der Tischplatte).
+# langen Achse (Y-Richtung), dort wo ein Spannfutter das Rohr fassen würde.
+# Der Y-Abstand zur Tischkante ist bewusst größer als
+# TUBE_ROTATION_SHAFT_LENGTH_M, damit die Welle nicht ins Kollisionsvolumen
+# des Tisches hineinragt (sonst erzeugt die Physik-Engine Kontaktkräfte, die
+# das Gelenk unkontrolliert durchdrehen lassen). Z liegt aus demselben Grund
+# etwas über TABLE_TOP_Z.
 TUBE_ROTATION_XY = (
     TABLE_CENTER[0],
     TABLE_CENTER[1] - TABLE_SIZE_XY[1] / 2 - TUBE_ROTATION_SHAFT_LENGTH_M - 0.1,
@@ -311,13 +264,10 @@ def isolate_gz_partition() -> None:
     """Isoliert diesen Lauf in einer eigenen gz-transport-Partition.
 
     gz-transport findet Prozesse standardmäßig per Multicast über die ganze
-    Maschine hinweg - läuft (z.B. von einem vorherigen Versuch) noch ein
-    anderer 'gz sim'-Prozess mit gleichem Weltnamen, kann der Spawn-Aufruf
-    bei DIESEM alten Prozess landen statt beim neu gestarteten Fenster, das
-    man gerade sieht ("kein Roboter da"). GZ_PARTITION kapselt Server, GUI,
-    'gz'/'ros2'-CLI-Aufrufe und die gz-transport-Python-Bindings dieses
-    einen Laufs in ihr eigenes Netz. Muss VOR dem Start von gz-sim und vor
-    jeder gz.transport/gz-CLI-Nutzung gesetzt sein.
+    Maschine hinweg - läuft noch ein alter 'gz sim'-Prozess mit gleichem
+    Weltnamen, kann ein Spawn-Aufruf bei DIESEM landen statt beim gerade
+    gestarteten. GZ_PARTITION kapselt Server, GUI und CLI-Aufrufe dieses
+    einen Laufs in ihr eigenes Netz. Muss VOR dem Start von gz-sim gesetzt sein.
     """
     os.environ["GZ_PARTITION"] = f"fr20_ceiling_{os.getpid()}"
 
@@ -440,12 +390,10 @@ def append_joint_position_controllers(urdf_path: Path) -> None:
 def urdf_to_sdf_model(urdf_path: Path) -> str:
     """Wandelt das URDF vorab in ein SDF <model>-Element um.
 
-    Wichtig: Der Roboter wird NICHT erst nach dem gz-sim-Start per
-    'ros_gz_sim create'-Service nachträglich gespawnt. Das führte in Tests
-    dazu, dass das Modell zwar physikalisch existierte (in Pose-Topics
-    sichtbar), aber die GUI-Szene (Ogre2/Entity-Tree) es nie anzeigte - ein
-    Sync-Problem beim nachträglichen Spawnen. Ist der Roboter dagegen von
-    Anfang an Teil der world.sdf (wie Boden/Tisch/Wände), rendert er zuverlässig.
+    Der Roboter wird NICHT erst nach dem gz-sim-Start per 'ros_gz_sim
+    create'-Service nachträglich gespawnt (das Modell existierte dabei zwar
+    physikalisch, wurde aber nie in der GUI-Szene angezeigt) - ist er von
+    Anfang an Teil der world.sdf, rendert er zuverlässig.
     """
     env = gazebo_env_with_fr20_meshes()
     result = run(["gz", "sdf", "-p", str(urdf_path)], capture_output=True, text=True, env=env)
@@ -457,29 +405,38 @@ def urdf_to_sdf_model(urdf_path: Path) -> str:
 
 def build_tube_rotation_model_sdf() -> str:
     """SDF-Modell für die Rohr-Rotationsachse (siehe TUBE_ROTATION_*-Konstanten
-    oben und tube_rotation.py): ein Ständer (fix mit der Welt verbunden) und
-    eine drehbare Welle, mit JointPositionController-Plugin genau wie bei
-    den FR20-Armgelenken (append_joint_position_controllers) - ansteuerbar
-    über /{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos.
+    und tube_rotation.py): ein Ständer (fix mit der Welt verbunden) und eine
+    drehbare Welle, mit JointPositionController-Plugin wie bei den
+    FR20-Armgelenken - ansteuerbar über
+    /{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos.
 
     Bewusst ein Platzhalter (kein Nachbau der realen Baugruppe/des
-    Spannfutters) - für Kinematik/Zeitablauf im Zusammenspiel mit dem
-    FR20-Arm reicht das; sobald Mechanik und Motor feststehen, Geometrie
-    und TUBE_ROTATION_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
+    Spannfutters); sobald Mechanik und Motor feststehen, Geometrie und
+    TUBE_ROTATION_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
 
-    Die Welle rotiert um die Y-Achse (lange Achse der Baugruppe, siehe
-    ASSEMBLY_SIZE_XY_M) - Link-Posen bleiben dafür unrotiert (achsparallel
-    zum Modell-Rahmen), nur die Visual-/Kollisionsgeometrie der Welle wird
-    für die Darstellung um 90° gekippt. Das hält den Gelenk-Achsvektor
-    (0 1 0) und das Trägheitsmoment im selben, unrotierten Bezugsrahmen -
-    ohne zusätzliche Koordinatentransformationen.
+    Die Welle rotiert um die Y-Achse - Link-Posen bleiben unrotiert, nur die
+    Visual-/Kollisionsgeometrie der Welle wird für die Darstellung um 90°
+    gekippt, damit Gelenk-Achsvektor und Trägheitsmoment im selben,
+    unrotierten Bezugsrahmen bleiben.
     """
-    # Grundmaße für Ständer und Welle (Platzhaltergeometrie)
     stand_height = TUBE_ROTATION_Z
     shaft_length = TUBE_ROTATION_SHAFT_LENGTH_M
     shaft_radius = 0.02
     shaft_mass = 5.0  # siehe TUBE_ROTATION_INERTIA_YY_KGM2 für die Begründung
     p, i, d = TUBE_ROTATION_GAINS
+
+    # Ein reiner Zylinder ist um seine eigene Längsachse rotationssymmetrisch -
+    # dreht er sich genau um diese Achse, sieht man von außen keine Bewegung.
+    # Deshalb eine zusätzliche, radial herausragende "Fahne" fix an der Welle
+    # (eigenes <visual>/<collision> im selben shaft-Link, bewegt sich also
+    # automatisch mit) - asymmetrisch radial UND entlang der Wellenlänge
+    # (näher am äußeren Ende statt mittig, damit sie bei keiner Drehstellung
+    # mit dem Ständer kollidiert).
+    marker_length = shaft_length * 0.5
+    marker_width = 0.04
+    marker_protrusion = 0.08  # radialer Überstand über die Wellenoberfläche hinaus
+    marker_x_offset = shaft_radius + marker_protrusion / 2
+    marker_y_offset = shaft_length / 2 - marker_length / 2 - 0.02
 
     return f"""
     <model name="{TUBE_ROTATION_MODEL_NAME}">
@@ -511,6 +468,15 @@ def build_tube_rotation_model_sdf() -> str:
           <pose>0 0 0 1.5708 0 0</pose>
           <geometry><cylinder><radius>{shaft_radius}</radius><length>{shaft_length}</length></cylinder></geometry>
           <material><ambient>0.8 0.6 0.1 1</ambient><diffuse>0.8 0.6 0.1 1</diffuse></material>
+        </visual>
+        <collision name="collision_marker">
+          <pose>{marker_x_offset} {marker_y_offset} 0 0 0 0</pose>
+          <geometry><box><size>{marker_protrusion} {marker_length} {marker_width}</size></box></geometry>
+        </collision>
+        <visual name="visual_marker">
+          <pose>{marker_x_offset} {marker_y_offset} 0 0 0 0</pose>
+          <geometry><box><size>{marker_protrusion} {marker_length} {marker_width}</size></box></geometry>
+          <material><ambient>0.85 0.1 0.1 1</ambient><diffuse>0.85 0.1 0.1 1</diffuse></material>
         </visual>
       </link>
       <joint name="stand_fixed" type="fixed">
@@ -569,12 +535,10 @@ def build_world_sdf(robot_model_sdf: str) -> str:
       </link>
     </model>"""
 
-    # 'wall_west' (auf der -X-Seite) bleibt bewusst weg: gz-sim's Standard-GUI-
-    # Kamera startet bei Pose (-6, 0, 6, pitch 0.5) und blickt entlang +X auf
-    # den Ursprung. Mit einer geschlossenen Box aus 4 Wänden + Decke würde die
-    # Kamera nur die Außenseite dieser einen Wand sehen (Raum wirkt komplett
-    # leer/schwarz-weiß, kein Roboter sichtbar) - offen auf dieser Seite blickt
-    # man von Anfang an direkt hinein.
+    # 'wall_west' (-X-Seite) bleibt bewusst weg: gz-sim's Standard-Kamera
+    # startet bei (-6, 0, 6) und blickt entlang +X auf den Ursprung - mit
+    # einer geschlossenen Box würde sie nur die Außenseite dieser einen Wand
+    # sehen, offen auf dieser Seite blickt man von Anfang an hinein.
     walls = "".join([
         wall("wall_north", f"0 {half} {wall_h / 2} 0 0 0", f"{ROOM_SIZE_XY} {wall_t} {wall_h}"),
         wall("wall_south", f"0 {-half} {wall_h / 2} 0 0 0", f"{ROOM_SIZE_XY} {wall_t} {wall_h}"),
@@ -679,14 +643,10 @@ def wait_for_world(world_name: str, timeout: float = 60.0) -> None:
     """Wartet, bis gz-sim die Welt (inkl. des darin enthaltenen Roboters) geladen hat.
 
     Wirft TimeoutError statt sys.exit() zu rufen: sys.exit() erzeugt ein
-    SystemExit, das von "except Exception" (z.B. in gui/my_gui.py's
-    Hintergrund-Threads) NICHT gefangen wird - ein Timeout hier würde dann
-    zwar den Auto-Start-Thread lautlos beenden, aber self._gz_proc bliebe
-    fälschlich als "läuft" stehen, ohne dass Publisher aufgebaut wurden
-    (führte zu "'NoneType' object is not subscriptable" bei einem späteren
-    Programmstart). Default-Timeout bewusst höher als früher (60 statt 30s),
-    da langsamere Rechner beim ersten Laden von Meshes/Welt länger brauchen
-    können.
+    SystemExit, das von "except Exception" in Hintergrund-Threads (z.B.
+    gui/my_gui.py) nicht gefangen wird und dort zu einem inkonsistenten
+    Zustand führen würde. Timeout bewusst hoch (60s), da langsamere Rechner
+    beim ersten Laden von Meshes/Welt länger brauchen können.
     """
     deadline = time.time() + timeout
     service = f"/world/{world_name}/control"

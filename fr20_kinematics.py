@@ -109,26 +109,12 @@ _chain_cache: UrdfChain | None = None
 
 
 def load_chain() -> UrdfChain:
-    """Lädt (und cached) die Gelenkkette aus dem generierten URDF.
-
-    Öffentlich (kein führender Unterstrich), weil auch robot_program.py sie
-    direkt braucht (siehe _is_transition_safe, das für die Tisch-
-    Kollisionsprüfung selbst durch die Kette läuft statt forward_kinematics()
-    zu nutzen - dafür reicht die Endpose allein nicht).
-
-    Die Kette ändert sich innerhalb eines Laufs nicht (feste Modellstruktur,
-    nur die Gelenkwinkel selbst variieren) - ein erneutes Parsen der
-    URDF-Datei bei jedem IK-/FK-Aufruf wäre reine Verschwendung:
-    resolve_point() in robot_program.py kann pro Punkt bis zu ~9 IK-Aufrufe
-    auslösen (primärer Versuch + Fallback-Kandidaten), jeder davon rief
-    früher hier erneut ET.parse() auf dieselbe Datei auf. Fehlt die Datei
-    noch (z.B. bevor überhaupt eine Simulation gestartet wurde), wird sie
-    einmalig erzeugt statt einen Fehler zu werfen - das deckt auch
-    Kollisionsprüfungen ab, die schon vor dem ersten launch_simulation()
-    laufen (siehe robot_program._is_transition_safe)."""
+    """Lädt (und cached) die Gelenkkette aus dem generierten URDF - öffentlich,
+    da robot_program.py sie ebenfalls direkt braucht. Cache spart wiederholtes
+    URDF-Parsen bei den vielen IK-Aufrufen pro Punkt (resolve_point). Existiert
+    das URDF noch nicht, wird es hier bei Bedarf einmalig erzeugt."""
     global _chain_cache
     if _chain_cache is None:
-        # beim ersten Aufruf: URDF ggf. erzeugen und Kette einmalig laden
         urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
         if not urdf_path.exists():
             sim.WORK_DIR.mkdir(exist_ok=True)

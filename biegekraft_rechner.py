@@ -37,10 +37,8 @@ import argparse
 import math
 from dataclasses import dataclass
 
-# Fließgrenzen gängiger Werkstoffe (MPa = N/mm^2) - Richtwerte für eine
-# erste Abschätzung, im Zweifel das Werkstoff-Datenblatt/Zeugnis prüfen,
-# Fließgrenzen streuen je nach Charge/Wärmebehandlung/Kaltverfestigung
-# durchs Ziehen des Rohrs selbst spürbar.
+# Fließgrenzen gängiger Werkstoffe (MPa = N/mm^2) - Richtwerte, im Zweifel
+# Werkstoff-Datenblatt/Zeugnis prüfen (streut je nach Charge/Wärmebehandlung).
 MATERIALS_MPA = {
     "S235": 235,       # Baustahl, unlegiert
     "S355": 355,       # Baustahl, unlegiert (höherfest)
@@ -63,15 +61,10 @@ class BendingEstimate:
     plastic_moment_nm: float
 
     def motor_shaft_torque_nm(self, gear_ratio: float, efficiency: float = 0.8, safety_factor: float = 1.5) -> float:
-        """Nötiges Drehmoment an der Motorwelle (vor dem Getriebe), damit
-        der Antrieb das vollplastische Biegemoment sicher aufbringen kann.
-
-        `efficiency` (Getriebewirkungsgrad, Richtwert 0.7-0.9 für ein
-        Schneckengetriebe bzw. 0.85-0.95 für ein Planetengetriebe) und
-        `safety_factor` (deckt Reibung zwischen Rohr/Dorn/Matrize, Dynamik
-        beim Anfahren und Materialstreuung ab, die diese Handrechnung nicht
-        erfasst) sind bewusst separate, leicht anpassbare Parameter.
-        """
+        """Nötiges Drehmoment an der Motorwelle, um das vollplastische
+        Biegemoment sicher aufzubringen. `efficiency`: Getriebewirkungsgrad
+        (0.7-0.9 Schnecke, 0.85-0.95 Planetengetriebe). `safety_factor`
+        deckt Reibung/Dynamik/Materialstreuung ab."""
         output_torque = self.plastic_moment_nm * safety_factor
         return output_torque / (gear_ratio * efficiency)
 

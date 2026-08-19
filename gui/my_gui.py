@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import fr20_ceiling_gazebo as sim  # noqa: E402  (Import erst nach sys.path-Anpassung möglich)
 import fr20_kinematics as kin  # noqa: E402
 import robot_program as rp  # noqa: E402
+import tube_rotation as rt  # noqa: E402
 
 PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_gelenkpose.json"
 PROGRAM_TISCH = REPO_ROOT / "programs" / "beispiel_tisch.json"
@@ -38,6 +39,7 @@ JOG_REPEAT_MS = 150
 # Anzeigetext -> tatsächlicher Wert. dict statt Liste, damit combo.get()
 # direkt als Schlüssel für den passenden Wert dient.
 JOG_STEP_OPTIONS = {"1 mm": 0.001, "1 cm": 0.01, "5 cm": 0.05, "10 cm": 0.10}
+TUBE_JOG_STEP_OPTIONS = {"1°": 1.0, "5°": 5.0, "10°": 10.0, "20°": 20.0}
 FONT_SIZE_OPTIONS = {"Klein": 9, "Mittel": 11, "Groß": 14}
 ZOOM_OPTIONS = {"100%": 1.0, "125%": 1.25, "150%": 1.5}
 # Tcl/Tk-Basis-Skalierung bei 100% (typischer Wert für 96dpi-Bildschirme) -
@@ -79,6 +81,10 @@ class MyApp:
         # _palette()/_apply_style unten).
         self._jog_step_m = JOG_STEP_M
         self._jog_rotation_step_deg = 5.0
+        # Schrittweite für die Jog-Pfeile der Rohr-Rotationsachse (siehe
+        # _rotation_jog_step/combo_tube_jogstep) - eigene Einstellung, da
+        # das ein anderes Gelenk als der Arm-Werkzeug-Jog (j6) ist.
+        self._tube_jog_step_deg = 5.0
         self._font_size = FONT_SIZE_OPTIONS["Mittel"]
         self._dark_mode = False
         self._zoom = ZOOM_OPTIONS["100%"]
@@ -138,6 +144,23 @@ class MyApp:
         # und ein gleichzeitiger Button-Klick gz-sim doppelt starten.
         self._sim_lock = threading.Lock()
 
+        # Eigener, unabhängiger Thread für den Rohrdrehungs-Testlauf (siehe
+        # on_rohrdrehung_pressed) - bewusst nicht self._program_thread, da
+        # die Rotationsachse ein anderes Gelenk als der FR20-Arm ist und
+        # parallel zu einem Arm-Programm laufen darf.
+        self._rotation_thread: threading.Thread | None = None
+        self._rotation_stop_event: threading.Event | None = None
+        # Gesetzt = Rohrdrehungs-Testlauf pausiert, analog zu
+        # self._pause_event - während der Pause darf per Jog-Pfeilen
+        # manuell weitergedreht werden.
+        self._rotation_pause_event = threading.Event()
+        # Aktive Achse des laufenden Testlaufs, None solange keiner läuft -
+        # wird von den Jog-Pfeilen während einer Pause direkt angesprochen.
+        self._rotation_axis: "rt.TubeRotationAxis | None" = None
+        self._rotation_current_deg = 0.0
+        self._rotation_pose_lock = threading.Lock()
+        self._rotation_jog_after_id = None
+
         # Zuletzt gesendete Gelenkpose (Gelenkwinkel in rad) - wird von den
         # Jog-Buttons (X+/X-/Y+/Y-) als Ausgangspunkt für den nächsten
         # kleinen Schritt gebraucht. Wird beim Erreichen von
@@ -147,29 +170,22 @@ class MyApp:
         self._current_joints: dict | None = None
         self._pose_lock = threading.Lock()
 
-        # Gesetzt = Programmausführung pausiert (siehe on_pause_pressed/
-        # on_weiter_pressed sowie robot_program.run_program's pause_event).
-        # Während der Pause dürfen
+        # Gesetzt = Programmausführung pausiert - während der Pause dürfen
         # die Jog-Buttons den Roboter bewegen, ohne dass das Programm
-        # gleichzeitig weiterläuft und sich mit ihnen in die Quere kommt.
+        # gleichzeitig weiterläuft.
         self._pause_event = threading.Event()
 
-        # Gesetzt = sanfter Abbruch (siehe on_abbruch_pressed sowie
-        # robot_program.run_program's abort_event): anders als
-        # self._stop_event (harter, sofortiger Stopp z.B. beim Ablösen
-        # durch ein anderes Programm oder beim Schließen der GUI, siehe
-        # _stop_running_program) überspringt das nur die restlichen
-        # Programmpunkte und lässt den Roboter zuerst noch zum Nullpunkt
-        # fahren, bevor das Programm tatsächlich endet.
+        # Gesetzt = sanfter Abbruch: anders als self._stop_event (harter,
+        # sofortiger Stopp z.B. beim Ablösen durch ein anderes Programm)
+        # überspringt das nur die restlichen Programmpunkte und lässt den
+        # Roboter zuerst noch zum Nullpunkt fahren.
         self._abort_event = threading.Event()
 
-        # Entwicklermodus (siehe on_entwicklermodus_toggle_pressed, Passwort
-        # DEV_MODE_PASSWORD) + Einzelschrittbetrieb darin (siehe
-        # on_einzelschritt_toggled/on_naechster_punkt_pressed). Gesetzt =
-        # der laufende Programm-Worker wartet vor jedem Punkt auf
-        # self._step_event (siehe robot_program.run_program's step_event)
-        # statt direkt weiterzufahren - anders als _pause_event (komplett
-        # anhalten) hier "genau einen Punkt weiterfahren und wieder warten".
+        # Entwicklermodus (Passwort DEV_MODE_PASSWORD) + Einzelschrittbetrieb
+        # darin: gesetzt = der Programm-Worker wartet vor jedem Punkt auf
+        # self._step_event statt direkt weiterzufahren - anders als
+        # _pause_event (komplett anhalten) hier "einen Punkt weiterfahren
+        # und wieder warten".
         self._dev_mode = False
         self._single_step_var = tk.BooleanVar(value=False)
         self._step_event = threading.Event()
@@ -199,14 +215,9 @@ class MyApp:
         Toplevel-Fenster selbst, die ihren Hintergrund per .configure()
         statt per ttk-Style bekommen) immer dieselben Farben verwenden."""
         if self._dark_mode:
-            # Deutlich dunklerer, satterer Hintergrund als vorher (war
-            # #1b1f27/#262c38 - Fenster und Karten lagen farblich zu nah
-            # beieinander, wirkte flach) plus kräftigere, leicht
-            # aufgehellte Akzent-/Statusfarben statt der 1:1 aus dem hellen
-            # Design übernommenen (die auf dunklem Grund matt/schmutzig
-            # wirkten) - jede Statusfarbe (Erfolg/Warnung/Gefahr/...) ist
-            # bewusst eigens fürs dunkle Design abgestimmt, nicht nur
-            # abgedunkelt.
+            # Jede Statusfarbe (Erfolg/Warnung/Gefahr/...) ist eigens fürs
+            # dunkle Design abgestimmt statt nur abgedunkelt, damit Fenster
+            # und Karten sich farblich klar voneinander abheben.
             return {
                 "bg": "#11141b",
                 "card_bg": "#1c212c",
@@ -252,16 +263,13 @@ class MyApp:
         """Einheitliches, modernes Erscheinungsbild für die ganze GUI -
         bewusst hier in Python statt in der .ui-Datei: pygubu-Designer
         schreibt die .ui beim Speichern komplett neu und würde reine
-        XML-Anpassungen sonst wieder verwerfen (mehrfach passiert), Styles
-        aus Python bleiben davon unberührt.
+        XML-Anpassungen sonst wieder verwerfen.
 
-        Wiederholt aufrufbar (siehe on_darkmode_toggle_pressed/
-        _on_schriftgroesse_selected) - ttk-Styles aktualisieren beim erneuten
-        style.configure() automatisch ALLE Widgets, die diesen Style
-        verwenden, ganz ohne die Widgets selbst neu zu bauen. Nur die
-        Toplevel-Fenster selbst (die ihren Hintergrund per .configure()
-        statt per ttk-Style bekommen) müssen zusätzlich über
-        _refresh_toplevel_backgrounds() aktualisiert werden.
+        Wiederholt aufrufbar - ttk-Styles aktualisieren beim erneuten
+        style.configure() automatisch alle Widgets, die diesen Style
+        verwenden. Nur die Toplevel-Fenster selbst (Hintergrund per
+        .configure() statt ttk-Style) brauchen zusätzlich
+        _refresh_toplevel_backgrounds().
         """
         style = ttk.Style(self.mainwindow)
         try:
@@ -285,9 +293,8 @@ class MyApp:
             "Title.TLabel", background=bg, foreground=accent, font=("Helvetica", fs + 9, "bold")
         )
         style.configure("TButton", font=base_font, padding=(14, 10))
-        # Bildkacheln bekommen einen dezenten weißen "Karten"-Rahmen statt der
-        # sonst unsichtbaren Standard-Button-Fläche - wirkt wie eine Karte,
-        # auf der das Vorschaubild liegt.
+        # Bildkacheln bekommen einen dezenten "Karten"-Rahmen statt der
+        # sonst unsichtbaren Standard-Button-Fläche.
         style.configure(
             "Card.TButton",
             background=card_bg,
@@ -297,12 +304,10 @@ class MyApp:
         )
         style.map("Card.TButton", background=[("active", p["jog_hover"])])
 
-        # Gruppierungs-Rahmen (ttk.Labelframe) für Jog-Pads und Programm-Karten
-        # in window_testen/window_programm/window_kalibrierung - macht
-        # zusammengehörige Buttons als eine sichtbare
-        # Einheit erkennbar statt einer losen Button-Wolke. Titelzeile des
-        # Labelframe braucht einen eigenen "<Style>.Label"-Sub-Style, sonst
-        # bleibt sie beim Standard-Look (schwarz auf grau).
+        # Gruppierungs-Rahmen (ttk.Labelframe) für Jog-Pads und Programm-Karten -
+        # macht zusammengehörige Buttons als sichtbare Einheit erkennbar.
+        # Titelzeile braucht einen eigenen "<Style>.Label"-Sub-Style, sonst
+        # bleibt sie beim Standard-Look.
         style.configure(
             "Card.TLabelframe",
             background=card_bg,
@@ -316,14 +321,12 @@ class MyApp:
             foreground=muted,
             font=("Helvetica", fs, "bold"),
         )
-        # Innerer Container für die ein-/ausklappbaren Jog-Pfeile (siehe
-        # _bind_jog_toggle) - eigener Frame-Style, da ein normaler ttk.Frame
-        # sonst den allgemeinen (grauen) Fensterhintergrund statt des
-        # weißen Karten-Hintergrunds der umgebenden Card.TLabelframe zeigt.
+        # Innerer Container für die ein-/ausklappbaren Jog-Pfeile - eigener
+        # Frame-Style, da ein normaler ttk.Frame sonst den grauen
+        # Fensterhintergrund statt des Karten-Hintergrunds zeigt.
         style.configure("Card.TFrame", background=card_bg)
-        # Klickbare "Kopfzeile" oberhalb der Jog-Pfeile, blendet
-        # frame_jog_controls_* ein/aus (siehe _bind_jog_toggle) - bewusst
-        # unauffällig/flach wie ein Abschnittstitel, kein Action-Button.
+        # Klickbare "Kopfzeile" oberhalb der Jog-Pfeile (siehe
+        # _bind_jog_toggle) - unauffällig/flach wie ein Abschnittstitel.
         style.configure(
             "JogToggle.TButton",
             background=card_bg,
@@ -346,12 +349,9 @@ class MyApp:
             style.map(name, background=[("active", active), ("disabled", "#c8ccd2")])
 
         # Button-Farben je nach Bedeutung (Start/Weiter/Pause/Abbruch/Jog) -
-        # aus der Palette statt fest verdrahtet, damit sie im Dark Mode
-        # eigens abgestimmte (nicht nur unverändert aus dem hellen Design
-        # übernommene, dort auf dunklem Grund matt wirkende) Farben zeigen.
-        # Die hellen Status-Akzentfarben (success/warning) sind im Dark Mode
-        # kräftig-hell genug, dass dunkler statt weißer Buttontext lesbarer
-        # ist (weißer Text auf z.B. hellem #fbbf24 hätte zu wenig Kontrast).
+        # aus der Palette statt fest verdrahtet. Im Dark Mode sind die
+        # hellen Status-Akzentfarben (success/warning) kräftig genug, dass
+        # dunkler statt weißer Buttontext lesbarer ist.
         dark_fg = "#12151c"
         colored_button("Primary.TButton", accent, p["accent_active"])
         colored_button("Success.TButton", p["success"], p["success_active"], fg=dark_fg if self._dark_mode else "white")
@@ -359,13 +359,10 @@ class MyApp:
         colored_button("Danger.TButton", p["danger"], p["danger_active"])
         colored_button("Secondary.TButton", p["secondary"], p["secondary_active"])
         colored_button("Jog.TButton", p["jog"], p["jog_active"])
-        # Jog-Buttons bekommen eine einheitliche quadratische Mindestgröße
-        # und ein großes reines Pfeilsymbol (▲▼◀▶, siehe _bind_jog_hold-
-        # Aufrufe) - vorher standen dort Buchstabe+Pfeil-Mischungen (z.B.
-        # "X ▸"), die an ihrer Position im Kreuz nicht zur Pfeilrichtung
-        # passten (X+ oben zeigte einen Rechtspfeil). Jetzt zeigt jeder
-        # Button unmissverständlich in seine eigene Fahrtrichtung, die
-        # Achsen-Beschriftung steht separat als Kopfzeile über dem Kreuz.
+        # Jog-Buttons: einheitliche quadratische Mindestgröße mit reinem
+        # Pfeilsymbol (▲▼◀▶) statt Buchstabe+Pfeil - zeigt unmissverständlich
+        # in die eigene Fahrtrichtung, die Achsen-Beschriftung steht separat
+        # als Kopfzeile über dem Kreuz.
         style.configure("Jog.TButton", width=3, font=("Helvetica", fs + 5, "bold"), padding=(4, 10))
         # Achsen-Kopfzeile ("Ebene (X / Y)"/"Höhe (Z)"/"Drehung") über den
         # Pads sowie der Mittelpunkt-Marker "•" der XY-Kreuzmitte - beide
@@ -385,6 +382,7 @@ class MyApp:
         for attr in (
             "mainwindow", "window_testen", "window_programm",
             "window_kalibrierung", "window_optionen", "window_manuell", "window_log",
+            "window_rohrdrehung",
         ):
             window = getattr(self, attr, None)
             if window is not None:
@@ -392,17 +390,10 @@ class MyApp:
 
     def _make_responsive(self, window: tk.Toplevel, container: ttk.Frame) -> None:
         """Hält den Inhalt eines Fensters beim Verkleinern/Vergrößern
-        zentriert, statt ihn zu verzerren.
-
-        Frühere Variante gab den Grid-Zellen von `container` selbst Gewicht
-        (columnconfigure/rowconfigure(weight=1)) - dadurch wuchsen Buttons/
-        Kacheln ungleichmäßig auseinander und das Layout wirkte beim
-        Maximieren zerrissen statt weiterhin wie eine kompakte, mittige
-        Karte. Jetzt bekommt nur `window`s eigene Zelle Gewicht, `container`
-        selbst bleibt in seiner natürlichen Größe (siehe .ui: OHNE
-        sticky='nsew') und wird von Tkinter dadurch automatisch in der
-        Fenstermitte zentriert - überschüssiger Platz sammelt sich
-        gleichmäßig als Rand rundherum statt den Inhalt zu strecken."""
+        zentriert, statt ihn zu verzerren: nur `window`s eigene Zelle
+        bekommt Gewicht, `container` bleibt in seiner natürlichen Größe und
+        wird dadurch automatisch mittig zentriert - überschüssiger Platz
+        sammelt sich als Rand statt den Inhalt zu strecken."""
         window.columnconfigure(0, weight=1)
         window.rowconfigure(0, weight=1)
 
@@ -443,14 +434,9 @@ class MyApp:
 
             if self._gz_proc is not None and self._gz_proc.poll() is None:
                 # gz-sim läuft noch, aber self._publishers wurde nie gesetzt -
-                # ein vorheriger Versuch (z.B. der Auto-Start beim Öffnen der
-                # GUI) ist zwischen Prozessstart und Publisher-Aufbau
-                # gescheitert (z.B. Timeout in sim.wait_for_world auf einem
-                # langsameren Rechner). Ohne diesen Check würde hier "None"
-                # als Publisher zurückgegeben und ein Programm später mit
-                # "'NoneType' object is not subscriptable" abstürzen. Statt
-                # mit dem kaputten Rest weiterzumachen: alten Prozess sauber
-                # beenden und neu aufsetzen.
+                # ein vorheriger Startversuch ist zwischen Prozessstart und
+                # Publisher-Aufbau gescheitert. Statt mit dem kaputten Rest
+                # weiterzumachen: alten Prozess sauber beenden und neu aufsetzen.
                 print("Vorheriger Gazebo-Start war unvollständig, versuche es erneut ...")
                 sim.shutdown_simulation(self._gz_proc)
                 self._gz_proc = None
@@ -475,26 +461,19 @@ class MyApp:
         """Bricht ein evtl. gerade laufendes Punktprogramm ab - der
         gemeinsame Kern hinter on_abbruch_pressed, on_kalibrierung_weiter_pressed,
         on_close und dem Ablöse-Schritt in _run_program_async. Hebt eine evtl.
-        aktive Pause zuerst auf, damit run_program() nicht dort auf das
-        gleich folgende Abbruch-Signal wartet, statt sofort zu reagieren
-        (siehe _wait_while in robot_program.py). Gibt True zurück, wenn
-        tatsächlich ein Programm lief und abgebrochen wurde - False, wenn
-        ohnehin nichts lief.
+        aktive Pause zuerst auf. Gibt True zurück, wenn tatsächlich ein
+        Programm lief und abgebrochen wurde.
 
-        `graceful=False` (Standard, harter Stopp über self._stop_event):
-        bricht SOFORT ab, ohne Nullpunkt-Rückfahrt - richtig zum Ablösen
-        durch ein neues Programm oder beim Schließen der GUI, wo ein
-        zusätzlicher Umweg nur stören würde. Wartet hier auf das
-        Thread-Ende (join), da der Aufrufer i.d.R. direkt danach selbst
-        etwas an denselben Publishern sendet.
+        `graceful=False` (Standard): harter, sofortiger Stopp ohne
+        Nullpunkt-Rückfahrt, richtig zum Ablösen durch ein neues Programm
+        oder beim Schließen der GUI. Wartet auf das Thread-Ende (join), da
+        der Aufrufer meist direkt danach selbst an denselben Publishern sendet.
 
-        `graceful=True` (button 'Abbruch', siehe on_abbruch_pressed): setzt
-        stattdessen self._abort_event (siehe robot_program.run_program's
-        abort_event) - der Worker-Thread überspringt die restlichen
-        Programmpunkte, fährt aber noch zum Nullpunkt, bevor er sich ganz
-        normal beendet (inkl. des schon bestehenden on_done-Callbacks, der
-        z.B. window_programm wieder schließt). Kein join() hier - das
-        würde die GUI für die gesamte Nullpunkt-Rückfahrt einfrieren."""
+        `graceful=True` (Button 'Abbruch'): setzt stattdessen
+        self._abort_event - der Worker überspringt die restlichen
+        Programmpunkte, fährt aber noch zum Nullpunkt, bevor er sich normal
+        beendet (inkl. on_done-Callback). Kein join() hier, das würde die
+        GUI für die Nullpunkt-Rückfahrt einfrieren."""
         if self._program_thread is None or not self._program_thread.is_alive():
             return False
         self._pause_event.clear()
@@ -514,27 +493,21 @@ class MyApp:
         """Startet ein Punktprogramm (siehe robot_program.py) in einem eigenen
         Thread, damit die GUI währenddessen bedienbar bleibt.
 
-        `program_source` ist entweder ein Pfad zu einer Programmdatei (wird
-        hier geladen) oder bereits ein fertiges Program-Objekt (z.B.
-        rp.build_calibration_program() für den Kalibrierungs-Button) - beide
-        laufen über denselben stop_event/self._program_thread-Mechanismus,
-        damit sich AUCH die automatische Kalibrierfahrt sauber von einem
-        anderen Programm ablösen lässt bzw. selbst abgelöst werden kann,
-        statt als nicht-abbrechbarer Sonderfall nebenher zu laufen.
+        `program_source` ist entweder ein Pfad zu einer Programmdatei oder
+        bereits ein fertiges Program-Objekt (z.B. rp.build_calibration_program()
+        für den Kalibrierungs-Button) - beide laufen über denselben
+        stop_event/self._program_thread-Mechanismus.
 
         Läuft bereits ein anderes Programm, wird es zuerst über stop_event
-        abgebrochen (spätestens am Ende des gerade angefahrenen Punkts) -
-        so kann man z.B. mitten in "Tisch" auf "Gelenkpose" klicken und der
-        Arm wechselt sofort die Route, statt erst das alte Programm zu Ende
-        abzufahren.
+        abgebrochen - so kann man z.B. mitten in "Tisch" auf "Gelenkpose"
+        klicken und der Arm wechselt sofort die Route.
 
         `on_done` (optional) wird aufgerufen, sobald DIESER Lauf regulär
-        endet oder mit einem Fehler abbricht - aber NICHT, wenn er durch
-        einen neuen Button-Klick (stop_event) abgebrochen wurde, da dann
-        ein anderer Ablauf die GUI übernimmt. Läuft im Hintergrund-Thread,
-        wird aber über `mainwindow.after(0, ...)` auf den Tkinter-Hauptthread
-        umgeleitet (Tkinter-Widgets dürfen nicht direkt aus einem anderen
-        Thread angefasst werden).
+        endet oder mit einem Fehler abbricht - nicht, wenn er durch einen
+        neuen Button-Klick (stop_event) abgebrochen wurde, da dann ein
+        anderer Ablauf die GUI übernimmt. Läuft im Hintergrund-Thread, wird
+        aber über `mainwindow.after(0, ...)` auf den Tkinter-Hauptthread
+        umgeleitet.
         """
         self._stop_running_program()
 
@@ -608,30 +581,21 @@ class MyApp:
 
     def _jog(self, dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, drot_deg: float = 0.0) -> bool:
         """Bewegt den Arm um einen kleinen Schritt in X/Y/Z (Schrittweite:
-        self._jog_step_m, siehe combo_jogstep in den Optionen) oder dreht
-        das Werkzeug (j6) um drot_deg (siehe combo_jogstep_rotation), beides
-        ausgehend von der zuletzt bekannten Pose (self._current_joints).
-        Gibt True zurück, wenn der Schritt gesendet wurde - False, wenn er
-        verweigert wurde oder fehlschlug (dann bricht _hold_jog das
-        wiederholte Fahren ab, siehe unten). dx/dy/dz und drot_deg schließen
-        sich gegenseitig aus (ein Aufruf bewegt entweder linear oder dreht).
+        self._jog_step_m) oder dreht das Werkzeug (j6) um drot_deg, beides
+        ausgehend von der zuletzt bekannten Pose. Gibt True zurück, wenn der
+        Schritt gesendet wurde - False, wenn er verweigert wurde oder
+        fehlschlug (dann bricht _hold_jog das wiederholte Fahren ab).
+        dx/dy/dz und drot_deg schließen sich gegenseitig aus.
 
-        Läuft bewusst NICHT über die Rückzug/Verfahren/Absenken-Logik aus
-        robot_program.py - Jog-Schritte sind klein genug (Standard 5cm),
-        dass eine direkte kontinuitätsbasierte IK (resolve_point, ohne den
-        breiten Fallback - der wäre für ein reaktionsschnelles "gehalten =
-        durchfahren" zu langsam) ohne Höhenumweg schnell und in der Praxis
-        sicher bleibt, solange man von einer bereits sicheren Pose aus
-        startet. Die Werkzeug-Rotation (drot_deg) braucht gar keine IK -
-        sie ändert direkt und ausschließlich j6, alle anderen Gelenke (und
-        damit die Werkzeugposition) bleiben unverändert.
+        Läuft bewusst nicht über die Rückzug/Verfahren/Absenken-Logik aus
+        robot_program.py - Jog-Schritte sind klein genug, dass direkte
+        kontinuitätsbasierte IK ohne Höhenumweg sicher bleibt. Die
+        Werkzeug-Rotation (drot_deg) braucht gar keine IK, sie ändert nur j6.
 
-        Läuft gerade ein Programm UND ist es pausiert (siehe
-        on_pause_pressed), wird einfach mitbewegt - genau dafür ist Pause
-        da. Läuft ein Programm und ist es NICHT pausiert, wird der Jog
-        verweigert (nicht abgebrochen!): gleichzeitiges Schreiben auf
-        dieselben Publisher von Programm und Jog würde sich in die Quere
-        kommen. Erst "Pause" drücken, dann jogt es.
+        Läuft gerade ein Programm und ist es pausiert, wird einfach
+        mitbewegt. Läuft es unpausiert, wird der Jog verweigert (nicht
+        abgebrochen) - gleichzeitiges Schreiben auf dieselben Publisher
+        würde sich sonst in die Quere kommen.
         """
         if (
             self._program_thread is not None
@@ -681,18 +645,13 @@ class MyApp:
     def _hold_jog(self, axis: str, sign: float) -> None:
         """Wird beim Drücken eines Jog-Buttons aufgerufen und fährt sofort
         einen Schritt, plant sich danach per `after()` selbst alle
-        JOG_REPEAT_MS erneut ein - so bewegt sich der Arm statisch weiter,
-        solange der Button gehalten wird. `_release_jog` (beim Loslassen)
-        bricht die Kette wieder ab. Bricht auch von selbst ab, wenn `_jog`
-        fehlschlägt (z.B. Reichweitenende erreicht), statt sinnlos weiter
-        zu versuchen.
+        JOG_REPEAT_MS erneut ein - so bewegt sich der Arm weiter, solange
+        der Button gehalten wird. `_release_jog` bricht die Kette beim
+        Loslassen ab, ebenso bricht sie von selbst ab, wenn `_jog`
+        fehlschlägt (z.B. Reichweitenende erreicht).
 
-        `axis` ist 'x'/'y'/'z'/'rot', die aktuelle Schrittweite
-        (self._jog_step_m bzw. self._jog_rotation_step_deg) wird bei JEDEM
-        Aufruf frisch gelesen statt beim ersten Drücken fest eingefroren zu
-        werden - ändert man die Schrittweite in den Optionen während der
-        Arm gerade durchgehend jogt, wirkt das dadurch sofort auf den
-        nächsten Schritt."""
+        `axis` ist 'x'/'y'/'z'/'rot' - die Schrittweite wird bei jedem
+        Aufruf frisch gelesen, damit eine Änderung in den Optionen sofort wirkt."""
         kwargs = {}
         if axis == "x":
             kwargs["dx"] = sign * self._jog_step_m
@@ -716,16 +675,12 @@ class MyApp:
 
     def _bind_jog_hold(self, widget_id: str, axis: str, sign: float, symbol: str) -> None:
         """Verbindet einen Jog-Button mit Drücken-halten-loslassen statt
-        eines einfachen Klicks (siehe _hold_jog/_release_jog), und stylt ihn
-        einheitlich mit einem Pfeilsymbol statt "x+"/"y-" o.ä. Wird beim
-        erstmaligen Öffnen von window_programm/_kalibrierung/_manuell
-        aufgerufen - vorher existiert das Widget in pygubu noch nicht.
+        einem einfachen Klick, und stylt ihn mit einem Pfeilsymbol statt
+        "x+"/"y-" o.ä. Wird beim erstmaligen Öffnen der Jog-Fenster
+        aufgerufen, vorher existiert das Widget in pygubu noch nicht.
 
-        `axis` ('x'/'y'/'z'/'rot') und `sign` (+1/-1) statt fertiger dx/dy/dz-
-        Werte, damit _hold_jog die aktuell in den Optionen eingestellte
-        Schrittweite (self._jog_step_m/_jog_rotation_step_deg) bei jedem
-        Tastendruck neu abfragt, statt einen beim GUI-Start fest gebundenen
-        Wert zu verwenden (siehe _hold_jog)."""
+        `axis`/`sign` statt fertiger dx/dy/dz-Werte, damit _hold_jog die
+        aktuelle Schrittweite bei jedem Tastendruck neu abfragt."""
         widget = self.builder.get_object(widget_id, self.mainwindow)
         widget.bind("<ButtonPress-1>", lambda event: self._hold_jog(axis, sign))
         widget.bind("<ButtonRelease-1>", lambda event: self._release_jog())
@@ -733,13 +688,9 @@ class MyApp:
 
     def _bind_jog_toggle(self, toggle_button_id: str, controls_frame_id: str) -> None:
         """Macht die Kopfzeile eines Jog-Bereichs klickbar: blendet die
-        Pfeil-Buttons darunter (frame_jog_controls_programm bzw.
-        _kalibrierung) per grid()/grid_remove() ein und aus, statt sie fest
-        immer sichtbar zu lassen - praktisch, wenn man die manuelle
-        Steuerung gerade nicht braucht und das Fenster kompakter haben will.
-        Der Pfeil im Button-Text (▾ = eingeblendet, ▸ = ausgeblendet) zeigt
-        den aktuellen Zustand an. Standardzustand beim Öffnen: eingeblendet
-        (wie zuvor, als es noch keinen Ein-/Ausblende-Mechanismus gab)."""
+        Pfeil-Buttons darunter per grid()/grid_remove() ein und aus, statt
+        sie fest sichtbar zu lassen. Der Pfeil im Button-Text (▾/▸) zeigt
+        den aktuellen Zustand. Standardzustand beim Öffnen: eingeblendet."""
         button = self.builder.get_object(toggle_button_id, self.mainwindow)
         controls = self.builder.get_object(controls_frame_id, self.mainwindow)
         window = button.winfo_toplevel()
@@ -751,14 +702,11 @@ class MyApp:
             else:
                 controls.grid()
                 button.configure(text=button.cget("text").replace("▸", "▾"))
-            # Fenster war zuvor per _fit_window_to_screen() auf eine feste
-            # Größe gesetzt (geometry("WxH+X+Y")) - ohne das hier zu
-            # aktualisieren, bliebe nach dem Einklappen eine leere weiße
-            # Fläche stehen, wo die Jog-Pfeile waren, statt dass sich das
-            # Fenster verkleinert. update_idletasks() lässt Tkinter zuerst
-            # die neue, kleinere/größere benötigte Größe berechnen; die
-            # Fensterposition (x/y) bleibt dabei unverändert, da geometry()
-            # hier bewusst ohne "+x+y" aufgerufen wird.
+            # Fenster hat eine feste Größe (siehe _fit_window_to_screen) -
+            # ohne Neuberechnung bliebe nach dem Einklappen eine leere
+            # Fläche stehen. update_idletasks() lässt Tkinter zuerst die
+            # neue benötigte Größe berechnen; die Position bleibt
+            # unverändert, da geometry() hier ohne "+x+y" aufgerufen wird.
             window.update_idletasks()
             window.geometry(f"{window.winfo_reqwidth()}x{window.winfo_reqheight()}")
 
@@ -766,14 +714,10 @@ class MyApp:
 
     def _update_position_readout(self) -> None:
         """Aktualisiert die Live-Positionsanzeige (TCP-Position + Werkzeug-
-        Drehung j6 - nicht alle 6 Gelenkwinkel, das würde die Fenster nur
-        unnötig aufblähen und interessiert beim Jogging ohnehin kaum; j1-j5
-        ergeben sich implizit aus X/Y/Z, nur j6 (Werkzeug-Rotation) hat mit
-        den Dreh-Buttons einen eigenen, nicht aus X/Y/Z ablesbaren Wert) in
-        allen bereits geöffneten Jog-Fenstern und plant sich selbst alle
-        300ms erneut ein (gestartet einmalig in __init__) - ein zentraler
-        Loop statt einem pro Fenster, da er ohnehin nur dort etwas tut, wo
-        das jeweilige Fenster (und damit sein Label) schon existiert."""
+        Drehung j6 - die einzigen beiden Werte, die sich nicht implizit aus
+        X/Y/Z ergeben) in allen bereits geöffneten Jog-Fenstern und plant
+        sich selbst alle 300ms erneut ein - ein zentraler Loop statt einem
+        pro Fenster."""
         with self._pose_lock:
             current = self._current_joints
         if current is not None:
@@ -787,6 +731,14 @@ class MyApp:
             ):
                 if getattr(self, window_attr, None) is not None:
                     self.builder.get_object(label_id, self.mainwindow).configure(text=text)
+
+        if getattr(self, "window_rohrdrehung", None) is not None:
+            with self._rotation_pose_lock:
+                rotation_deg = self._rotation_current_deg
+            self.builder.get_object("label_rohrdrehung_position", self.mainwindow).configure(
+                text=f"Winkel: {rotation_deg:+.1f}°"
+            )
+
         self.mainwindow.after(300, self._update_position_readout)
 
     def on_pause_pressed(self):
@@ -812,28 +764,17 @@ class MyApp:
         print("Programm wird fortgesetzt.")
 
     def on_abbruch_pressed(self):
-        """Button 'Abbruch' (button_abbruch, nur in window_programm
-        gebunden): bricht beim ERSTEN Klick die restlichen Programmpunkte ab
-        (nicht nur pausieren), lässt den Roboter aber zuerst noch zum
-        Nullpunkt fahren, bevor das Programm endet (siehe
-        _stop_running_program(graceful=True) sowie robot_program.run_program's
-        abort_event) - Gazebo bleibt dabei offen.
+        """Button 'Abbruch' (nur in window_programm gebunden): bricht beim
+        ERSTEN Klick die restlichen Programmpunkte ab, lässt den Roboter
+        aber zuerst noch zum Nullpunkt fahren (siehe
+        _stop_running_program(graceful=True)). `on_done` (back_to_main) wird
+        dabei GANZ NORMAL aufgerufen, sobald die Rückfahrt fertig ist - kein
+        eigenes Verstecken/Zeigen der Fenster nötig.
 
-        Anders als beim harten Stopp (self._stop_event, z.B. beim Ablösen
-        durch ein neues Programm) wird `_run_program_async`'s `on_done`
-        (bei Figur-Programmen: back_to_main) hier GANZ NORMAL aufgerufen,
-        sobald der Worker-Thread die Nullpunkt-Rückfahrt beendet hat - kein
-        eigenes Verstecken/Zeigen der Fenster nötig, das übernimmt back_to_main
-        wie bei einem normal durchgelaufenen Programm auch.
-
-        Ein ZWEITER Klick, während diese Nullpunkt-Rückfahrt noch läuft
-        (self._abort_event bereits gesetzt), eskaliert zum sofortigen harten
-        Stopp (graceful=False) - für den Fall, dass der Bedienstand den
-        Roboter JETZT anhalten will und nicht erst nach der Rückfahrt zum
-        Nullpunkt warten kann. Dabei bleibt kein on_done-Aufruf mehr übrig
-        (siehe _run_program_async - bei stop_event wird on_done bewusst
-        übersprungen), daher hier wie früher manuell window_programm
-        verstecken und das Hauptfenster zeigen."""
+        Ein ZWEITER Klick, während die Rückfahrt noch läuft, eskaliert zum
+        sofortigen harten Stopp (graceful=False) - dabei entfällt der
+        on_done-Aufruf, daher hier manuell window_programm verstecken und
+        das Hauptfenster zeigen."""
         if self._program_thread is None or not self._program_thread.is_alive():
             print("Kein Programm läuft gerade - Abbruch hat nichts zu tun.")
             return
@@ -898,21 +839,12 @@ class MyApp:
         self._open_calibration_window()
 
     def on_kalibrierung_weiter_pressed(self):
-        """Button 'Weiter' im Kalibrierungs-Fenster (button_kalibrierung_weiter): schließt die
-        Kalibrierung ab - mit oder ohne tatsächliches Neukalibrieren (siehe
-        on_kalibrieren_pressed), ein zuvor gespeicherter Tisch-Offset gilt
-        einfach unverändert weiter - und zeigt das Hauptfenster mit den
-        Programm-Buttons. Vor dem allerersten Aufruf dieses Buttons ist das
-        Hauptfenster nicht erreichbar (siehe run()), es kann also kein
-        Programm gestartet werden, bevor der Nutzer diese Kalibrierung
-        gesehen/bestätigt hat.
-
-        Bricht zuerst eine noch laufende automatische Kalibrierfahrt ab
-        (siehe on_kalibrieren_pressed/_run_program_async), falls "Weiter"
-        geklickt wird, bevor der Roboter den Kalibrierpunkt erreicht hat -
-        sonst würde die Fahrt im Hintergrund weiterlaufen und
-        _confirm_and_calibrate später unerwartet über dem schon sichtbaren
-        Hauptfenster aufpoppen, statt gar nicht mehr zu erscheinen."""
+        """Button 'Weiter' im Kalibrierungs-Fenster: schließt die
+        Kalibrierung ab (mit oder ohne tatsächliches Neukalibrieren, ein
+        zuvor gespeicherter Tisch-Offset gilt sonst einfach weiter) und
+        zeigt das Hauptfenster. Bricht zuerst eine noch laufende
+        automatische Kalibrierfahrt ab, falls "Weiter" geklickt wird, bevor
+        der Roboter den Kalibrierpunkt erreicht hat."""
         self._stop_running_program()
         self._release_jog()
         self.window_kalibrierung.withdraw()
@@ -921,31 +853,19 @@ class MyApp:
         self.mainwindow.focus_force()
 
     def on_kalibrieren_pressed(self):
-        """Button 'Nullpunkt kalibrieren' (button_kalibrieren im Kalibrierungs-Fenster):
-        fährt den Roboter zunächst automatisch auf den markanten Kalibrierpunkt
-        (sim.CALIBRATION_REFERENCE_XYZ, siehe Kommentar dort - ein Punkt auf
-        der Baugruppe statt einer bloßen Tischkante), damit der Nutzer nicht
-        mehr den kompletten Weg per Jog manuell zurücklegen muss. Erst danach
-        erscheint der Bestätigungsdialog: von dort kann per Jog noch
-        feinjustiert werden (falls die Baugruppe leicht verrutscht ist),
-        bevor bestätigt wird - dann wird aus der aktuellen Pose der neue
-        Tisch-Offset berechnet und gespeichert (siehe
-        robot_program.calibrate_table_offset) und ab dem nächsten gesendeten
-        Punkt automatisch auf alle kartesischen Programmziele angewendet
-        (siehe robot_program.run_program).
+        """Button 'Nullpunkt kalibrieren': fährt den Roboter zunächst
+        automatisch auf den markanten Kalibrierpunkt (sim.CALIBRATION_REFERENCE_XYZ),
+        damit der Nutzer nicht den kompletten Weg per Jog zurücklegen muss.
+        Erst danach erscheint der Bestätigungsdialog: von dort kann per Jog
+        noch feinjustiert werden, bevor bestätigt wird - dann wird aus der
+        aktuellen Pose der neue Tisch-Offset berechnet und gespeichert.
 
         Läuft über denselben _run_program_async-Mechanismus wie die anderen
-        Programm-Buttons (Gelenkpose/Tisch/Figur1) - wichtig, damit diese
-        Fahrt genau wie jedes andere Programm über stop_event abgebrochen
-        bzw. von einem anderen Button sauber abgelöst werden kann, statt als
-        nicht-unterbrechbarer Sonderfall mit einem eigenen, losgelösten
-        Thread zu laufen (der z.B. beim Wechsel auf 'Figur1' mitten in der
-        Kalibrierfahrt hängen bliebe und dessen Gelenkbefehle sich dann mit
-        denen des neuen Programms überschneiden würden).
+        Programm-Buttons, damit diese Fahrt genauso über stop_event
+        abgebrochen/abgelöst werden kann.
 
         home_at_end=False: der Kalibrierpunkt IST bereits der Nullpunkt, ein
-        automatisches Nachfahren dorthin (siehe robot_program.run_program)
-        wäre hier nur ein unnötiger Zusatzschritt."""
+        automatisches Nachfahren dorthin wäre ein unnötiger Zusatzschritt."""
         self._run_program_async(
             rp.build_calibration_program(),
             on_done=self._confirm_and_calibrate,
@@ -1021,10 +941,8 @@ class MyApp:
             self._style_widget("button_weiter_programm", "Success.TButton")
             self._style_widget("button_abbruch", "Danger.TButton")
             self._style_widget("button_naechster_punkt", "Primary.TButton")
-            # startet deaktiviert - wird erst per on_step_wait-Callback aktiv
-            # (siehe _set_naechster_punkt_enabled/_run_program_async), wenn
-            # der Worker tatsächlich auf 'Nächster Punkt' wartet, statt
-            # dauerhaft klickbar (aber wirkungslos) zu sein.
+            # startet deaktiviert - wird erst per on_step_wait-Callback aktiv,
+            # wenn der Worker tatsächlich auf 'Nächster Punkt' wartet.
             self.builder.get_object("button_naechster_punkt", self.mainwindow).state(["disabled"])
             self._make_responsive(self.window_programm, self.builder.get_object("frame_programm"))
             self._fit_window_to_screen(self.window_programm)
@@ -1046,6 +964,167 @@ class MyApp:
         der Arm fährt jede der vier Tischecken mit 0,5 m Höhenabstand über
         der Tischplatte an und dreht dort einmal den Werkzeugkopf (yaw 360°)."""
         self._run_figure_program(PROGRAM_ECKEN)
+
+    def on_rohrdrehung_pressed(self):
+        """Button 'Rohrdrehung testen' (button_platzhalter im Hauptfenster,
+        vorher ungenutzte vierte Kachel): reiner Achsen-Testlauf für die
+        Rohr-Rotationsachse (siehe tube_rotation.py) - dreht zuerst 180° in
+        eine Richtung, dann 360° in die andere, unabhängig vom FR20-Arm.
+        Dient zum Sichtprüfen der Achse in Gazebo.
+
+        Öffnet window_rohrdrehung (analog zu _run_figure_program beim Arm)
+        mit Live-Winkelanzeige, Pause/Weiter/Abbruch und zwei Jog-Pfeilen
+        zum manuellen Nachdrehen während einer Pause. Läuft in einem
+        eigenen Hintergrund-Thread (self._rotation_thread, nicht
+        self._program_thread), da die Rotationsachse ein anderes Gelenk
+        als der Arm ist und parallel zu einem Arm-Programm laufen darf."""
+        if self._rotation_thread is not None and self._rotation_thread.is_alive():
+            print("Rohrdrehungs-Testlauf läuft bereits.")
+            return
+
+        self.mainwindow.withdraw()
+        if getattr(self, "window_rohrdrehung", None) is None:
+            self.window_rohrdrehung = self.builder.get_object("window_rohrdrehung", self.mainwindow)
+            self.builder.connect_callbacks(self)
+            self.window_rohrdrehung.configure(background=self._palette()["bg"])
+            self._style_widget("label_rohrdrehung_status", "Title.TLabel")
+            self._style_widget("label_rohrdrehung_position", "Readout.TLabel")
+            self._style_widget("frame_jog_rohrdrehung", "Card.TLabelframe")
+            self._style_widget("frame_ablauf_rohrdrehung", "Card.TLabelframe")
+            self._style_widget("button_rohrdrehung_pause", "Warning.TButton")
+            self._style_widget("button_rohrdrehung_weiter", "Success.TButton")
+            self._style_widget("button_rohrdrehung_abbruch", "Danger.TButton")
+            for widget_id, sign in (
+                ("button_rohrdrehung_jog_minus", -1),
+                ("button_rohrdrehung_jog_plus", 1),
+            ):
+                widget = self.builder.get_object(widget_id, self.mainwindow)
+                widget.bind("<ButtonPress-1>", lambda event, s=sign: self._hold_rotation_jog(s))
+                widget.bind("<ButtonRelease-1>", lambda event: self._release_rotation_jog())
+                widget.configure(style="Jog.TButton")
+            self._make_responsive(self.window_rohrdrehung, self.builder.get_object("frame_rohrdrehung"))
+            self._fit_window_to_screen(self.window_rohrdrehung)
+        else:
+            self.window_rohrdrehung.deiconify()
+
+        self._rotation_pause_event.clear()
+        with self._rotation_pose_lock:
+            self._rotation_current_deg = 0.0
+        stop_event = threading.Event()
+        self._rotation_stop_event = stop_event
+
+        def on_angle_changed(deg: float) -> None:
+            with self._rotation_pose_lock:
+                self._rotation_current_deg = deg
+
+        def settle_s(delta_deg: float) -> float:
+            # dieselben Sicherheitsfaktoren wie robot_program._min_settle_time
+            delta_rad = abs(math.radians(delta_deg))
+            return delta_rad / (sim.TUBE_ROTATION_VELOCITY_RAD_S * 0.6) + 0.4
+
+        def back_to_main() -> None:
+            self.window_rohrdrehung.withdraw()
+            self.mainwindow.deiconify()
+
+        def worker() -> None:
+            try:
+                publishers = self._ensure_simulation_running()
+                axis = rt.TubeRotationAxis(rt.GazeboRotationBackend(publishers))
+                self._rotation_axis = axis
+                print("Rohrdrehungs-Testlauf gestartet: 180°, dann -360°.")
+                rt.run_rotation_sequence(
+                    axis,
+                    steps=[180.0, -360.0],
+                    stop_event=stop_event,
+                    pause_event=self._rotation_pause_event,
+                    on_angle_changed=on_angle_changed,
+                    settle_s=settle_s,
+                )
+                if not stop_event.is_set():
+                    print("Rohrdrehungs-Testlauf beendet.")
+            except Exception as exc:  # noqa: BLE001 - im Hintergrund-Thread sichtbar loggen
+                print(f"Fehler beim Rohrdrehungs-Testlauf: {exc}")
+                traceback.print_exc()
+            finally:
+                self._rotation_axis = None
+                if not stop_event.is_set():
+                    self.mainwindow.after(0, back_to_main)
+
+        self._rotation_thread = threading.Thread(target=worker, daemon=True)
+        self._rotation_thread.start()
+
+    def on_rohrdrehung_pause_pressed(self):
+        """Button 'Pause' in window_rohrdrehung: pausiert den laufenden
+        Rohrdrehungs-Testlauf, damit die Jog-Pfeile die Achse übernehmen
+        können - analog zu on_pause_pressed beim Arm."""
+        if self._rotation_thread is None or not self._rotation_thread.is_alive():
+            print("Kein Rohrdrehungs-Testlauf läuft gerade - Pause hat nichts zu tun.")
+            return
+        self._rotation_pause_event.set()
+        print("Rohrdrehung pausiert - Jog-Pfeile sind jetzt aktiv.")
+
+    def on_rohrdrehung_weiter_pressed(self):
+        """Button 'Weiter' in window_rohrdrehung: hebt die Pause auf, der
+        Testlauf macht ab der zuletzt (ggf. per Jog geänderten) Stellung
+        weiter."""
+        if not self._rotation_pause_event.is_set():
+            print("Rohrdrehung ist nicht pausiert - nichts zu tun.")
+            return
+        self._rotation_pause_event.clear()
+        print("Rohrdrehung wird fortgesetzt.")
+
+    def on_rohrdrehung_abbruch_pressed(self):
+        """Button 'Abbruch' in window_rohrdrehung: bricht den Testlauf
+        sofort und endgültig ab (kein Nullpunkt-Konzept bei dieser Achse,
+        anders als beim Arm - einfach ein sofortiger Stopp) und kehrt zum
+        Hauptfenster zurück."""
+        if self._rotation_thread is None or not self._rotation_thread.is_alive():
+            print("Kein Rohrdrehungs-Testlauf läuft gerade - Abbruch hat nichts zu tun.")
+            return
+        self._rotation_pause_event.clear()  # sonst würde run_rotation_sequence auf die Pause warten
+        self._rotation_stop_event.set()
+        self._rotation_thread.join(timeout=5.0)
+        print("Rohrdrehungs-Testlauf abgebrochen.")
+        self.window_rohrdrehung.withdraw()
+        self.mainwindow.deiconify()
+
+    def _rotation_jog_step(self, sign: float) -> bool:
+        """Dreht die Rohr-Rotationsachse manuell um einen kleinen Schritt
+        (Schrittweite: self._tube_jog_step_deg) - nur erlaubt, während ein
+        laufender Testlauf pausiert ist, dasselbe Prinzip wie beim Arm-Jog
+        (_jog). Gibt True zurück, wenn der Schritt gesendet wurde."""
+        if (
+            self._rotation_thread is not None
+            and self._rotation_thread.is_alive()
+            and not self._rotation_pause_event.is_set()
+        ):
+            print("Rohrdrehungs-Jog ignoriert: Testlauf läuft gerade - erst 'Pause' drücken.")
+            return False
+        if self._rotation_axis is None:
+            print("Rohrdrehungs-Jog ignoriert: keine Achse aktiv.")
+            return False
+        new_angle = self._rotation_axis.rotate_by(sign * self._tube_jog_step_deg)
+        with self._rotation_pose_lock:
+            self._rotation_current_deg = new_angle
+        return True
+
+    def _hold_rotation_jog(self, sign: float) -> None:
+        """Wie _hold_jog, aber für die Rotationsachsen-Jog-Pfeile - fährt
+        sofort einen Schritt und plant sich danach per after() alle
+        JOG_REPEAT_MS erneut ein, solange der Button gehalten wird."""
+        if not self._rotation_jog_step(sign):
+            self._rotation_jog_after_id = None
+            return
+        self._rotation_jog_after_id = self.mainwindow.after(
+            JOG_REPEAT_MS, lambda: self._hold_rotation_jog(sign)
+        )
+
+    def _release_rotation_jog(self) -> None:
+        """Beendet die per _hold_rotation_jog gestartete Wiederholung
+        (Loslassen eines Jog-Pfeils)."""
+        if self._rotation_jog_after_id is not None:
+            self.mainwindow.after_cancel(self._rotation_jog_after_id)
+            self._rotation_jog_after_id = None
 
     def on_testen_pressed(self):
         """Button 'Testen' im Hauptfenster: öffnet window_testen (analog zu
@@ -1112,6 +1191,16 @@ class MyApp:
             combo_zoom.set(next(k for k, v in ZOOM_OPTIONS.items() if v == self._zoom))
             combo_zoom.bind("<<ComboboxSelected>>", lambda e: self._on_zoom_selected(combo_zoom.get()))
 
+            combo_tube_jogstep = self.builder.get_object("combo_tube_jogstep", self.mainwindow)
+            combo_tube_jogstep["values"] = list(TUBE_JOG_STEP_OPTIONS.keys())
+            combo_tube_jogstep.state(["readonly"])
+            combo_tube_jogstep.set(
+                next(k for k, v in TUBE_JOG_STEP_OPTIONS.items() if v == self._tube_jog_step_deg)
+            )
+            combo_tube_jogstep.bind(
+                "<<ComboboxSelected>>", lambda e: self._on_tube_jogstep_selected(combo_tube_jogstep.get())
+            )
+
             self._style_widget(
                 "button_darkmode_toggle",
                 "Secondary.TButton",
@@ -1151,6 +1240,14 @@ class MyApp:
         self._jog_step_m = JOG_STEP_OPTIONS[label]
         print(f"Jog-Schrittweite: {label}")
 
+    def _on_tube_jogstep_selected(self, label: str) -> None:
+        """Callback der combo_tube_jogstep-Combobox (siehe on_optionen_pressed) -
+        self._tube_jog_step_deg wird von _rotation_jog_step bei jedem
+        Tastendruck der Rohrdrehungs-Jog-Pfeile frisch gelesen, wirkt also
+        sofort auf den nächsten Schritt."""
+        self._tube_jog_step_deg = TUBE_JOG_STEP_OPTIONS[label]
+        print(f"Rohrdrehung-Schrittweite: {label}")
+
     def _on_schriftgroesse_selected(self, label: str) -> None:
         """Callback der combo_schriftgroesse-Combobox: setzt die
         Grundschriftgröße und wendet sie sofort auf alle offenen Fenster an
@@ -1188,17 +1285,11 @@ class MyApp:
     def on_entwicklermodus_toggle_pressed(self):
         """Button 'Entwicklermodus aktivieren/deaktivieren' in
         window_optionen: zum Aktivieren muss DEV_MODE_PASSWORD eingegeben
-        werden (simpledialog.askstring mit show='*', kein echter
-        Sicherheitsmechanismus - nur ein Schutz vor versehentlichem
-        Aktivieren). Deaktivieren braucht kein Passwort.
-
-        Deaktivieren schaltet auch den Einzelschrittbetrieb (siehe
-        on_einzelschritt_toggled) mit ab und gibt ein evtl. gerade
-        wartendes Programm sofort frei (self._step_event.set()) - sonst
-        bliebe ein laufendes Programm, das im Einzelschrittbetrieb gerade
-        auf 'Nächster Punkt' wartet, nach dem Verlassen des
-        Entwicklermodus für immer hängen, da der Button dafür dann nicht
-        mehr bedienbar ist."""
+        werden (kein echter Sicherheitsmechanismus, nur ein Schutz vor
+        versehentlichem Aktivieren). Deaktivieren braucht kein Passwort und
+        schaltet den Einzelschrittbetrieb mit ab - gibt dabei ein evtl.
+        gerade wartendes Programm sofort frei, sonst bliebe es hängen, da
+        der Button dafür dann nicht mehr bedienbar ist."""
         if not self._dev_mode:
             pw = simpledialog.askstring(
                 "Entwicklermodus",
@@ -1227,14 +1318,11 @@ class MyApp:
         checkbutton.state(["!disabled"] if self._dev_mode else ["disabled"])
 
     def on_einzelschritt_toggled(self):
-        """Checkbutton 'Einzelschrittbetrieb' in window_optionen (nur im
-        Entwicklermodus bedienbar, siehe on_entwicklermodus_toggle_pressed):
-        self._single_step_var wird von _run_program_async beim nächsten
-        Programmstart gelesen (siehe dortiges step_event). Wird es
-        WÄHREND ein Programm bereits darauf wartet ausgeschaltet, gibt
-        self._step_event.set() dieses Warten sofort frei, statt den
-        Roboter bis zum nächsten Klick auf 'Nächster Punkt' stehen zu
-        lassen."""
+        """Checkbutton 'Einzelschrittbetrieb' (nur im Entwicklermodus
+        bedienbar): self._single_step_var wird von _run_program_async beim
+        nächsten Programmstart gelesen. Wird es ausgeschaltet, während ein
+        Programm bereits wartet, gibt self._step_event.set() dieses Warten
+        sofort frei, statt den Roboter stehen zu lassen."""
         if not self._single_step_var.get():
             self._step_event.set()
         print(f"Einzelschrittbetrieb: {'ein' if self._single_step_var.get() else 'aus'}")
@@ -1248,16 +1336,11 @@ class MyApp:
         self._step_event.set()
 
     def _set_naechster_punkt_enabled(self, enabled: bool) -> None:
-        """Schaltet den 'Nächster Punkt'-Button (nur) genau dann aktiv, wenn
+        """Schaltet den 'Nächster Punkt'-Button nur dann aktiv, wenn
         robot_program.run_program gerade wirklich darauf wartet (siehe
-        dessen on_step_wait-Callback, hier in _run_program_async verdrahtet)
-        - sonst bliebe er dauerhaft klickbar, obwohl ein Klick oft
-        wirkungslos wäre (z.B. während der Roboter noch zum vorherigen
-        Punkt unterwegs ist). Wird über mainwindow.after(0, ...) auf den
-        Tkinter-Hauptthread umgeleitet, da der Aufrufer (Programm-Worker)
-        in einem Hintergrund-Thread läuft. Tut nichts, falls window_programm
-        noch gar nicht gebaut wurde (z.B. bei Gelenkpose/Tisch, die nicht
-        über window_programm laufen)."""
+        dessen on_step_wait-Callback) - sonst bliebe er klickbar, obwohl
+        ein Klick wirkungslos wäre. Tut nichts, falls window_programm noch
+        nicht gebaut wurde (z.B. bei Gelenkpose/Tisch)."""
         if getattr(self, "window_programm", None) is None:
             return
         button = self.builder.get_object("button_naechster_punkt", self.mainwindow)
@@ -1330,13 +1413,10 @@ class MyApp:
         self.window_log.withdraw()
 
     def on_manuell_pressed(self):
-        """Button 'Manuelle Steuerung' (in window_optionen): öffnet
-        window_manuell - freie Jog-Steuerung des Roboters (X/Y/Z) ganz ohne
-        laufendes Punktprogramm, z.B. um kurz von Hand nachzujustieren.
-        Nutzt denselben _jog-Mechanismus wie die Jog-Pads in
-        window_programm/window_kalibrierung (siehe _bind_jog_hold) - _jog
-        verweigert von sich aus, wenn gerade ein Programm läuft und nicht
-        pausiert ist, das gilt hier unverändert mit."""
+        """Button 'Manuelle Steuerung': öffnet window_manuell - freie
+        Jog-Steuerung des Roboters (X/Y/Z) ganz ohne laufendes
+        Punktprogramm. Nutzt denselben _jog-Mechanismus wie die Jog-Pads
+        in window_programm/window_kalibrierung."""
         if getattr(self, 'window_manuell', None) is None:
             self.window_manuell = self.builder.get_object('window_manuell', self.mainwindow)
             self.builder.connect_callbacks(self)
@@ -1382,7 +1462,13 @@ class MyApp:
     def on_close(self):
         # zentrale Aufräum-Routine: Jog stoppen, Programm abbrechen, Gazebo beenden, Fenster schließen
         self._release_jog()
+        self._release_rotation_jog()
         self._stop_running_program()
+        if self._rotation_thread is not None and self._rotation_thread.is_alive():
+            self._rotation_pause_event.clear()
+            if self._rotation_stop_event is not None:
+                self._rotation_stop_event.set()
+            self._rotation_thread.join(timeout=5.0)
         if self._gz_proc is not None:
             sim.shutdown_simulation(self._gz_proc)
         self.mainwindow.destroy()

@@ -1,54 +1,39 @@
 #!/usr/bin/env python3
-"""Ansteuerung der Rohr-Rotationsachse (Motor + Getriebe, dreht das
-eingespannte Rohr zwischen zwei Biegungen um einen bestimmten Drehwinkel
-weiter, damit die nächste Biegung in der richtigen Ebene liegt).
+"""Ansteuerung der Rohr-Rotationsachse: dreht das eingespannte Rohr zwischen
+zwei Biegungen um einen Winkel weiter, damit die nächste Biegung in der
+richtigen Ebene liegt.
 
-Die konkrete Motor-Hardware steht noch nicht fest - deshalb ist die
-Ansteuerung hier bewusst in zwei Teile getrennt:
-
+Die Motor-Hardware steht noch nicht fest, daher zweigeteilt:
   - `TubeRotationAxis` kennt nur "drehe um X Grad weiter" und hält den
-    aktuell angenommenen Winkel nach - unabhängig davon, WIE die Drehung
-    physisch passiert.
-  - Ein "Backend" (siehe `SimulatedRotationBackend`/`SerialStepperBackend`
-    unten) übernimmt die eigentliche Kommunikation mit dem Motor. Steht die
-    Hardware fest, reicht es, ein neues Backend zu schreiben (gleiche
-    kleine Schnittstelle: `move_by_degrees(delta_deg)`) - der Rest des
-    Programms (robot_program.py, GUI) bleibt unverändert.
+    Winkel nach, unabhängig von der physischen Umsetzung.
+  - Ein "Backend" übernimmt die Kommunikation mit dem Motor. Neue Hardware
+    braucht nur ein neues Backend (Schnittstelle: `move_by_degrees`), der
+    Rest (robot_program.py, GUI) bleibt unverändert.
 
-`SimulatedRotationBackend` loggt nur auf der Konsole (kein echter Motor
-nötig) - genau wie `robot_program.py --dry-run` beim FR20-Arm, zum Testen
-des Ablaufs ohne Hardware. `SerialStepperBackend` ist die häufigste reale
-Variante (Schrittmotor an einer Treiberplatine, gesteuert von einem
-Arduino/ESP32, das über USB-Seriell einfache Textbefehle entgegennimmt) -
-als Startpunkt, sobald die Hardware feststeht. `GazeboRotationBackend`
-steuert stattdessen die simulierte Rotationsachse aus
-fr20_ceiling_gazebo.build_tube_rotation_model_sdf() an - zum Testen von
-Kinematik/Zeitablauf im Zusammenspiel mit dem FR20-Arm, bevor überhaupt
-reale Hardware existiert.
+Backends: `SimulatedRotationBackend` (Konsolen-Log, keine Hardware nötig),
+`SerialStepperBackend` (Schrittmotor an Arduino/ESP32 über USB-Seriell),
+`GazeboRotationBackend` (simulierte Achse in Gazebo).
 """
 
 from __future__ import annotations
 
 import argparse
 import math
+import threading
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
 
 class RotationBackend(Protocol):
-    """Schnittstelle, die jedes Motor-Backend erfüllen muss - eine einzige
-    Methode, damit ein Hardware-Wechsel später nur diese eine Klasse
-    betrifft, nicht die Aufrufer."""
+    """Schnittstelle für jedes Motor-Backend - ein Hardware-Wechsel betrifft
+    dadurch nur die Backend-Klasse, nicht die Aufrufer."""
 
     def move_by_degrees(self, delta_deg: float) -> None: ...
 
 
 class SimulatedRotationBackend:
-    """Backend ohne echte Hardware - loggt nur, was gesendet würde.
-
-    Zum Testen der Programmlogik (z.B. neue Punkte mit Rotationsschritten
-    in robot_program.py), solange der reale Motor noch nicht angeschlossen
-    ist, oder um am PC ohne Werkstatt zu entwickeln."""
+    """Backend ohne echte Hardware - loggt nur, was gesendet würde."""
 
     def move_by_degrees(self, delta_deg: float) -> None:
         print(f"[Simulation] Rotationsachse dreht um {delta_deg:+.2f}°")
@@ -57,22 +42,14 @@ class SimulatedRotationBackend:
 @dataclass
 class SerialStepperBackend:
     """Backend für einen Schrittmotor an einem Mikrocontroller (Arduino/
-    ESP32), der über USB-Seriell ein einfaches Textprotokoll spricht:
+    ESP32) über ein einfaches USB-Seriell-Textprotokoll:
 
         PC  -> Controller:  "R<grad>\\n"      z.B. "R45.0\\n"
         Controller -> PC:   "OK\\n"           sobald die Bewegung fertig ist
 
-    Der Mikrocontroller rechnet Grad in Schritte um (steps_per_revolution *
-    gear_ratio * microstepping / 360) und gibt STEP/DIR-Pulse an die
-    Treiberplatine (z.B. A4988/DRV8825/TB6600) aus - dieser Teil ist
-    Firmware, nicht Teil dieser Datei. `steps_per_revolution`/`gear_ratio`
-    sind hier trotzdem als Parameter vorgesehen, falls stattdessen die
-    Umrechnung PC-seitig passieren und direkt eine Schrittzahl gesendet
-    werden soll (dann `move_by_degrees` entsprechend anpassen).
-
-    Bewusst ein simples Text-Protokoll statt z.B. Firmata/ROS-Serial: für
-    eine einzelne Achse mit "dreh um X Grad, warte auf fertig" reicht das,
-    ohne zusätzliche Abhängigkeiten auf Controller-Seite.
+    Der Mikrocontroller (Firmware, nicht Teil dieser Datei) rechnet Grad in
+    Schritte um (steps_per_revolution * gear_ratio * microstepping / 360)
+    und gibt STEP/DIR-Pulse an die Treiberplatine aus.
     """
 
     port: str = "/dev/ttyUSB0"
@@ -80,7 +57,7 @@ class SerialStepperBackend:
     timeout_s: float = 30.0
 
     def __post_init__(self) -> None:
-        import serial  # pyserial - nur importieren, wenn dieses Backend genutzt wird
+        import serial  # nur importieren, wenn dieses Backend genutzt wird
 
         self._serial = serial.Serial(self.port, self.baudrate, timeout=self.timeout_s)
 
@@ -102,50 +79,129 @@ class GazeboRotationBackend:
     """Backend für die simulierte Rotationsachse in Gazebo (siehe
     fr20_ceiling_gazebo.build_tube_rotation_model_sdf).
 
-    Anders als der reale Schrittmotor (SerialStepperBackend, der pro Aufruf
-    nur den relativen Winkel als Impuls bekommt) ist der gz-sim
-    JointPositionController ein Regler, der auf ein ABSOLUTES Zielgelenk
-    (in Radiant) hält - dieses Backend führt den absoluten Zielwinkel daher
-    selbst mit (`_current_rad`) und veröffentlicht bei jedem Aufruf die neue
-    Summe, statt nur das Delta durchzureichen.
+    Der gz-sim JointPositionController hält ein ABSOLUTES Zielgelenk (rad),
+    anders als der reale Schrittmotor, der nur den relativen Winkel als
+    Impuls bekommt - dieses Backend führt den absoluten Zielwinkel daher
+    selbst mit (`_current_rad`).
 
-    `publishers` ist das dict aus fr20_ceiling_gazebo.launch_simulation() -
-    das Veröffentlichen selbst (inkl. Wiederholungen gegen die noch nicht
-    vollständig aufgebaute gz-transport-Discovery) übernimmt
-    sim.send_joint_pose(), genau wie bei den FR20-Armgelenken."""
+    Discovery-Warmup (bis gz-transport den Publisher sicher gefunden hat)
+    passiert nur einmal in __init__, danach sendet move_by_degrees() direkt
+    eine einzelne Nachricht - wichtig, da run_rotation_sequence eine Drehung
+    in viele kleine Zwischenschritte zerlegt (siehe dort); mit vollem
+    Wiederholungs-Overhead pro Schritt wäre allein das Senden bei größeren
+    Sequenzen spürbar langsam."""
 
     def __init__(self, publishers: dict, start_deg: float = 0.0) -> None:
         import fr20_ceiling_gazebo as sim
 
-        self._sim = sim
         self._publishers = publishers
         self._current_rad = math.radians(start_deg)
+        self._Double = sim.import_gz("msgs", "double_pb2").Double
+        sim.send_joint_pose({"tube_rotation": self._current_rad}, self._publishers)
 
     def move_by_degrees(self, delta_deg: float) -> None:
         self._current_rad += math.radians(delta_deg)
-        self._sim.send_joint_pose({"tube_rotation": self._current_rad}, self._publishers)
+        msg = self._Double()
+        msg.data = self._current_rad
+        self._publishers["tube_rotation"].publish(msg)
 
 
 class TubeRotationAxis:
     """Hält den aktuell angenommenen Drehwinkel des Rohrs nach und reicht
-    Bewegungen an ein `RotationBackend` weiter (siehe oben).
+    Bewegungen an ein `RotationBackend` weiter.
 
-    Der Winkel wird rein rechnerisch mitgeführt (kein Feedback von einem
-    Encoder) - bei einem Schrittmotor ohne Rückmeldung ist das die übliche
-    Annahme (open-loop), solange kein Schritt verloren geht.
-    """
+    Der Winkel wird rein rechnerisch mitgeführt (kein Encoder-Feedback) -
+    bei einem Schrittmotor ohne Rückmeldung die übliche open-loop-Annahme.
+
+    `rotate_by` ist per Lock serialisiert, da gui/my_gui.py sie sowohl aus
+    dem Programm-Worker-Thread als auch aus dem Jog (Tkinter-Hauptthread,
+    während einer Pause) aufruft - ohne Lock könnten sich beide beim
+    `current_deg`-Update überschreiben."""
 
     def __init__(self, backend: RotationBackend, start_deg: float = 0.0) -> None:
         self._backend = backend
         self.current_deg = start_deg
+        self._lock = threading.Lock()
 
     def rotate_by(self, delta_deg: float) -> float:
         """Dreht das Rohr um `delta_deg` relativ zur aktuellen Stellung
         weiter (z.B. zwischen zwei Biegungen, um die nächste Biegeebene
         einzustellen). Gibt den neuen absoluten Winkel zurück."""
-        self._backend.move_by_degrees(delta_deg)
-        self.current_deg += delta_deg
-        return self.current_deg
+        with self._lock:
+            self._backend.move_by_degrees(delta_deg)
+            self.current_deg += delta_deg
+            return self.current_deg
+
+
+def run_rotation_sequence(
+    axis: TubeRotationAxis,
+    steps: list[float],
+    stop_event: "threading.Event | None" = None,
+    pause_event: "threading.Event | None" = None,
+    on_angle_changed=None,
+    settle_s=None,
+    dwell_s: float = 0.5,
+    step_deg: float = 20.0,
+) -> float:
+    """Fährt eine Liste relativer Drehschritte (Grad) nacheinander ab -
+    dasselbe stop_event/pause_event-Muster wie robot_program.run_program,
+    nur für die eine Rotationsachse statt den ganzen Arm.
+
+    Jeder Eintrag aus `steps` wird in `step_deg`-große Zwischenschritte
+    zerlegt (z.B. 180° in neun 20°-Schritten), nicht als ein Sprung
+    gesendet - so werden pause_event/stop_event/on_angle_changed alle
+    `step_deg` statt erst am Ende der ganzen Bewegung geprüft/ausgelöst.
+
+    `stop_event`: sofortiger, endgültiger Abbruch vor dem nächsten
+    Zwischenschritt. `pause_event`: hält vor jedem Zwischenschritt an,
+    macht danach normal weiter - während der Pause darf der Aufrufer
+    selbst `axis.rotate_by()` aufrufen (z.B. Jog-Buttons), ohne dass sich
+    das mit dieser Funktion in die Quere kommt (siehe TubeRotationAxis-Lock).
+    `on_angle_changed`: Hook für die Live-Anzeige, pro Zwischenschritt
+    aufgerufen. `settle_s`: Callable[[float], float], liefert die
+    Wartezeit bis eine Bewegung abgeschlossen ist (z.B. für einen
+    nicht-blockierenden gz-sim-Regler; bei einem blockierenden Backend wie
+    SerialStepperBackend genügt `settle_s=None`). `dwell_s` gilt nur nach
+    dem letzten Zwischenschritt eines `steps`-Eintrags.
+
+    Gibt den zuletzt erreichten Winkel (`axis.current_deg`) zurück.
+    """
+
+    def stopped() -> bool:
+        return stop_event is not None and stop_event.is_set()
+
+    def wait_paused_or_stopped() -> bool:
+        """Wartet, solange pause_event gesetzt ist. Gibt True zurück, wenn
+        währenddessen (oder schon vorher) stop_event gesetzt wurde."""
+        while pause_event is not None and pause_event.is_set() and not stopped():
+            time.sleep(0.1)
+        return stopped()
+
+    for delta_deg in steps:
+        if delta_deg == 0:
+            continue
+        n = max(1, math.ceil(abs(delta_deg) / step_deg))
+        increment = delta_deg / n
+
+        for i in range(n):
+            if wait_paused_or_stopped():
+                print("Rohrdrehung abgebrochen.")
+                return axis.current_deg
+
+            axis.rotate_by(increment)
+            if on_angle_changed is not None:
+                on_angle_changed(axis.current_deg)
+
+            is_last = i == n - 1
+            wait_s = settle_s(increment) if settle_s is not None else 0.0
+            deadline = time.time() + (max(wait_s, dwell_s) if is_last else wait_s)
+            while time.time() < deadline and not stopped():
+                time.sleep(min(0.05, max(0.0, deadline - time.time())))
+            if stopped():
+                print("Rohrdrehung abgebrochen.")
+                return axis.current_deg
+
+    return axis.current_deg
 
 
 def main() -> None:

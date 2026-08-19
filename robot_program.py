@@ -45,18 +45,13 @@ PROGRAMS_DIR = Path(__file__).resolve().parent / "programs"
 # angibt.
 DEFAULT_DWELL_S = 1.0
 
-# Sicherheitsfaktor auf die Gelenk-Geschwindigkeitsgrenze (siehe
-# sim.JOINT_VELOCITY_LIMIT_RAD_S) für die Reisezeit-Schätzung in
-# _min_settle_time - real wird die Grenzgeschwindigkeit erst nach einer
-# Beschleunigungsphase erreicht und vor dem Ziel wieder abgebremst, ein
-# Gelenk braucht für dieselbe Strecke also länger als delta/v_max.
+# Sicherheitsfaktor auf die Gelenk-Geschwindigkeitsgrenze für die
+# Reisezeit-Schätzung: real wird die Grenzgeschwindigkeit erst nach einer
+# Beschleunigungsphase erreicht, ein Gelenk braucht also länger als delta/v_max.
 _TRAVEL_SPEED_SAFETY = 0.6
 
-# Zusätzliche Zeit nach der geschätzten Anfahrzeit, damit der PD-Regler nach
-# Erreichen der Grenzgeschwindigkeit noch abbremsen/einschwingen kann, bevor
-# der nächste Punkt gesendet wird (siehe JOINT_GAINS-Kommentar in
-# fr20_ceiling_gazebo.py - ohne diese Marge schoss der Arm bei grossen
-# Sprüngen >100° über den Zielwinkel hinaus).
+# Zusätzliche Zeit nach der geschätzten Anfahrzeit, damit der PD-Regler noch
+# einschwingen kann, bevor der nächste Punkt gesendet wird.
 _SETTLE_MARGIN_S = 0.4
 
 
@@ -143,12 +138,10 @@ def _rpy_deg_to_matrix(rpy_deg: tuple[float, float, float]) -> np.ndarray:
 
 
 # Alternative Startwerte (j1, j2, j3, j4) für den Fallback in resolve_point,
-# falls die vom aktuellen Punkt aus fortgesetzte IK nicht konvergiert. Deckt
-# die üblichen Ellbogen-Konfigurationen ab (oben/unten, links/rechts), damit
-# auch große Sprünge zwischen zwei Punkten (z.B. quer über den Tisch) eine
-# Lösung finden, statt nur an einem lokalen Minimum nahe der alten Pose
-# hängenzubleiben. j5/j6 werden dabei aus dem bisherigen current_joints_rad
-# übernommen, da sie kaum Einfluss auf die grobe Erreichbarkeit haben.
+# falls die IK vom aktuellen Punkt aus nicht konvergiert - decken die
+# üblichen Ellbogen-Konfigurationen ab, damit auch große Sprünge zwischen
+# zwei Punkten eine Lösung finden statt an einem lokalen Minimum
+# hängenzubleiben.
 _FALLBACK_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5)
 _FALLBACK_ELBOWS = ((-1.5, -2.2, -1.2), (-1.5, 2.2, -1.2), (-0.5, -2.6, -1.5), (-0.5, 2.6, -1.5))
 
@@ -200,17 +193,14 @@ def resolve_point(
     die gefundene Lösung meist nahe an der vorherigen Konfiguration, statt
     zwischen mehreren möglichen Ellbogen-Stellungen zu springen.
 
-    Ist der Sprung zum Zielpunkt zu groß (z.B. weil ein Programm quer über
-    den Tisch springt), bleibt diese kontinuitätsbasierte Suche manchmal in
-    einem lokalen Minimum hängen, obwohl der Punkt eigentlich erreichbar
-    wäre. Deshalb wird bei einem Fehlschlag zusätzlich mit ein paar
-    alternativen Ellbogen-Konfigurationen (_FALLBACK_ELBOWS/_FALLBACK_J1)
-    gesucht - und zwar nicht nur die ERSTE gefundene Lösung genommen,
-    sondern unter allen gefundenen Kandidaten die bevorzugt, deren
-    Übergang von current_joints_rad aus nachweislich nicht durch den Tisch
-    schwingt (siehe _is_transition_safe). Das behebt genau das Problem, das
-    beim Debuggen von programs/beispiel_figur.json auftrat: mehrere gültige
-    IK-Lösungen existierten, aber die naiv erste gefundene kollidierte.
+    Bei einem zu großen Sprung kann diese kontinuitätsbasierte Suche in
+    einem lokalen Minimum hängenbleiben, obwohl der Punkt erreichbar wäre.
+    Deshalb wird bei einem Fehlschlag zusätzlich mit alternativen
+    Ellbogen-Konfigurationen (_FALLBACK_ELBOWS/_FALLBACK_J1) gesucht - unter
+    allen gefundenen Kandidaten wird die bevorzugt, deren Übergang von
+    current_joints_rad aus nachweislich nicht durch den Tisch schwingt
+    (siehe _is_transition_safe), statt einfach die erste gefundene Lösung
+    zu nehmen.
     """
     # direkte Gelenkpose: nur Grad -> Radiant umrechnen
     if point.joints_deg is not None:
@@ -231,34 +221,20 @@ def resolve_point(
     if primary is not None:
         candidates.append(primary)
 
-    # Ist die kontinuitätsnächste Primärlösung schon gefunden UND
-    # nachweislich sicher, sofort zurückgeben statt zusätzlich das ganze
-    # (teure) Fallback-Raster durchzurechnen - das kostete bei jedem Aufruf
-    # bis zu 8 weitere numerische IK-Läufe à 500 Iterationen inkl.
-    # Sweep-Sicherheitscheck, gemessen ca. 15-20s PRO Punkt (z.B. beim
-    # automatischen Anfahren des Kalibrierpunkts, das dadurch bei 3
-    # Wegpunkten fast eine Minute dauerte und in der GUI wie ein Hänger
-    # wirkte, obwohl primary die ganze Zeit schon eine gültige, sichere
-    # Lösung war). primary ist durch die Seedwahl bei current_joints_rad
-    # (siehe kin.inverse_kinematics) ohnehin praktisch immer die
-    # kontinuitätsnächste Lösung - das Fallback-Raster bleibt für die
-    # Fälle, in denen primary fehlschlägt oder unsicher ist.
+    # Primärlösung schon gefunden UND nachweislich sicher: sofort
+    # zurückgeben statt zusätzlich das teure Fallback-Raster durchzurechnen
+    # (primary ist durch die Seedwahl ohnehin praktisch immer die
+    # kontinuitätsnächste Lösung - das Raster braucht es nur, wenn primary
+    # fehlschlägt oder unsicher ist).
     if primary is not None and _is_transition_safe(current_joints_rad, primary):
         return primary
 
     # bei Bedarf mit alternativen Startstellungen weitere Lösungen suchen.
-    # max_iterations bewusst niedriger als der Standard (500) der primären
-    # IK oben: von den bis zu 20 Raster-Kombinationen (_FALLBACK_J1 x
-    # _FALLBACK_ELBOWS) konvergieren erfahrungsgemäß nur wenige überhaupt
-    # (der Rest sind schlicht ungültige/unerreichbare Startstellungen für
-    # DIESES Ziel) - eine tatsächlich konvergierende Lösung braucht dabei
-    # gemessen praktisch nie mehr als ~50 Iterationen, während ein
-    # nicht-konvergierender Versuch bei 500 Iterationen jedes Mal die
-    # vollen ca. 1.5s braucht, bevor er als gescheitert erkannt wird. Bei
-    # z.B. 13 von 20 fehlschlagenden Kombinationen (gemessen beim
-    # Kalibrierpunkt-Anfahren) macht allein das ~20s statt ~6s aus - genau
-    # das ließ die automatische Kalibrierfahrt wie eingefroren wirken,
-    # während Jog-Buttons währenddessen blockiert waren (siehe _jog).
+    # max_iterations niedriger als der Standard (500) der primären IK: die
+    # meisten der bis zu 20 Raster-Kombinationen konvergieren ohnehin nicht
+    # (ungültige/unerreichbare Startstellungen für dieses Ziel), eine
+    # tatsächlich konvergierende Lösung braucht selten mehr als ~50
+    # Iterationen - ein niedrigeres Limit hält die Fehlschläge schnell.
     _FALLBACK_MAX_ITERATIONS = 150
     if allow_fallback:
         for j1 in _FALLBACK_J1:
@@ -281,12 +257,7 @@ def resolve_point(
     # Unter allen kollisionssicheren Kandidaten die mit der geringsten
     # Gelenkbewegung zur aktuellen Pose wählen (statt einfach die erste
     # gefundene) - sonst kann bei mehreren gültigen Ellbogen-Konfigurationen
-    # eine weit entfernte gewählt werden, obwohl eine deutlich näherliegende
-    # ebenfalls sicher wäre. Das führte z.B. bei den Tischecken-Kopfdrehungen
-    # (programs/beispiel_tisch_ecken.json) dazu, dass statt einer reinen
-    # Handgelenk-Drehung der ganze Arm in eine andere Ellbogen-Stellung
-    # umschwang, was der real simulierte Regler in der kurzen dwell_s-Zeit
-    # oft nicht rechtzeitig nachvollziehen konnte.
+    # eine weit entfernte gewählt werden, obwohl eine näherliegende auch sicher wäre.
     safe_candidates = [c for c in candidates if _is_transition_safe(current_joints_rad, c)]
     if safe_candidates:
         def joint_delta(c: dict[str, float]) -> float:
@@ -379,23 +350,19 @@ def _build_travel_waypoints(
     Bei kartesischen Zielen unterhalb von sim.SAFE_TRAVEL_Z wird zuerst auf
     diese Höhe zurückgezogen (gleiche X/Y wie die aktuelle Pose), dann
     seitlich zum Ziel verfahren, erst dann abgesenkt - statt direkt quer zu
-    fahren. Grund: Zwei für sich sichere Punkte können unterschiedliche
-    Ellbogen-Konfigurationen brauchen; die reine Gelenkraum-Interpolation
-    zwischen ihnen schwingt dann oft tief durch den Tisch (siehe
-    programs/beispiel_figur.json, per Sweep-Analyse nachgewiesen - vgl.
-    Kommentar bei SAFE_TRAVEL_Z in fr20_ceiling_gazebo.py). Auf der
+    fahren. Grund: zwei für sich sichere Punkte können unterschiedliche
+    Ellbogen-Konfigurationen brauchen, die reine Gelenkraum-Interpolation
+    zwischen ihnen schwingt dann oft tief durch den Tisch. Auf der
     Rückzugshöhe bleibt genug Abstand zum Tisch, auch wenn dabei die
     Ellbogen-Konfiguration wechselt.
 
     Bei Gelenkpose-Zielen (`joints`) oder wenn kaum seitliche Bewegung nötig
-    ist, wird direkt zum Ziel gefahren wie bisher.
+    ist, wird direkt zum Ziel gefahren.
 
     `offset_xyz` (siehe sim.load_table_offset()) wird - falls ungleich Null -
     einmal auf den kartesischen Zielpunkt addiert, bevor irgendetwas anderes
-    berechnet wird: damit landen auch die Rückzug-/Verfahren-Zwischenschritte
-    schon an der korrigierten Position, statt am Ende noch einmal seitlich
-    nachzukorrigieren. Gelenkpose-Ziele sind davon unberührt (die sind nicht
-    tischrelativ gemeint).
+    berechnet wird, damit auch die Zwischenschritte schon an der korrigierten
+    Position landen. Gelenkpose-Ziele sind davon unberührt.
     """
     # Gelenkpose-Ziel: kein Umweg nötig
     if point.xyz is None:
@@ -418,19 +385,9 @@ def _build_travel_waypoints(
 
     # resolve_point wählt selbst unter mehreren IK-Kandidaten die per
     # _is_transition_safe nachweislich tischsichere Lösung - der Rückzug auf
-    # SAFE_TRAVEL_Z reduziert zusätzlich das Risiko, dass ALLE Kandidaten
-    # einer einzigen großen Bewegung unsicher sind, indem er sie in drei
-    # kleinere (und damit leichter sicher lösbare) Teilschritte zerlegt.
-    #
-    # Ein zusätzlicher Versuch, hier ADAPTIV per rekursiver Bisektion
-    # (kartesische Zwischenpunkte) nachzubessern, wurde wieder verworfen:
-    # bei den hartnäckigen Fällen in programs/beispiel_figur1.json (P7-P11)
-    # brachte das keine zuverlässige Verbesserung (teils sogar mehr
-    # Kollisionen) und war um Größenordnungen langsamer (>1 Minute statt
-    # <1s pro Punkt). Für die verbleibenden bekannten Problemfälle wurden
-    # stattdessen von Hand geprüfte sichere Zwischenpunkte in die
-    # Programmdatei selbst eingefügt (siehe deren Kommentare/Namen).
-    # dreistufige Route: Rückzug hoch, seitlich verfahren, absenken
+    # SAFE_TRAVEL_Z zerlegt eine große Bewegung zusätzlich in drei kleinere,
+    # leichter sicher lösbare Teilschritte (Rückzug hoch, seitlich
+    # verfahren, absenken).
     try:
         retract = resolve_point(
             Point(name=f"{point.name} (Rückzug)", xyz=(current_xyz[0], current_xyz[1], sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
@@ -524,68 +481,42 @@ def run_program(
 ) -> dict[str, float]:
     """Fährt alle Punkte eines Programms nacheinander an.
 
-    `publishers` sind gz-transport-Publisher pro Gelenk, wie sie
-    fr20_ceiling_gazebo.launch_simulation() aufbaut (ein Double-Topic pro
-    Gelenkname aus sim.JOINT_NAMES).
+    `publishers`: gz-transport-Publisher pro Gelenk (siehe
+    fr20_ceiling_gazebo.launch_simulation).
 
-    Ist `stop_event` gesetzt (z.B. threading.Event), wird nach dem aktuellen
-    Punkt abgebrochen, sobald das Event gesetzt wird - damit sich zwei
-    Programme, die denselben Roboter ansteuern, sauber ablösen können (siehe
-    gui/my_gui.py: ein Button-Klick während ein anderes Programm läuft
-    bricht es ab und fährt stattdessen sofort die neue Route).
+    `stop_event`: harter, sofortiger Abbruch ohne Nullpunkt-Rückfahrt -
+    damit sich zwei Programme am selben Roboter sauber ablösen können.
 
-    Ist `pause_event` gesetzt, wird vor jedem Zwischenschritt gewartet,
-    solange es gesetzt bleibt (siehe gui/my_gui.py: Pause/Weiter-Buttons) -
-    anders als stop_event bricht das nicht ab, sondern hält nur an.
+    `pause_event`: hält vor jedem Zwischenschritt an, solange gesetzt -
+    anders als stop_event kein Abbruch, macht danach normal weiter.
 
-    `current` ist die als bekannt angenommene Startpose - Default
-    SAFE_STAGING_POSE (siehe unten), da gz-sim den Roboter physikalisch
-    immer in der Null-Stellung spawnt und jeder Aufrufer vor dem ersten
-    Zielpunkt zunächst dorthin fährt (send_to_safe_staging_pose).
+    `current`: angenommene Startpose, Default SAFE_STAGING_POSE (gz-sim
+    spawnt den Roboter immer dort).
 
-    `get_current` (optional) wird vor jedem Punkt aufgerufen, um `current`
-    aufzufrischen - Hook für einen Aufrufer mit eigenem, von außen
-    veränderlichem Positions-Zustand (z.B. gui/my_gui.py: wird während
-    einer Pause gejoggt, macht das Programm beim Fortsetzen genau dort
-    weiter, wo der Jog den Arm hingefahren hat, statt die alte Position
-    vor der Pause anzunehmen).
+    `get_current` (optional): wird vor jedem Punkt aufgerufen, um `current`
+    aufzufrischen - für Aufrufer mit eigenem, von außen veränderlichem
+    Positions-Zustand (z.B. Jog während einer Pause).
 
-    `on_target_sent` (optional) wird nach jedem gesendeten Zwischenschritt
-    mit der neuen Pose aufgerufen - Hook für einen Aufrufer, der den
-    Fortschritt zusätzlich selbst mitverfolgen will (z.B. die GUI, um
-    self._current_joints synchron zu halten).
+    `on_target_sent` (optional): wird nach jedem gesendeten Zwischenschritt
+    mit der neuen Pose aufgerufen, damit der Aufrufer den Fortschritt
+    mitverfolgen kann.
 
-    `home_at_end` (Standard True): fährt nach dem letzten Programmpunkt
-    (bzw. bei loop=True erst nach dem Loop-Ende, bzw. bei einem Abbruch
-    über abort_event direkt danach) zusätzlich HOME_POINT (den
-    Nullpunkt/Kalibrierpunkt auf der Baugruppe) an, bevor die Funktion
-    zurückkehrt - "das Programm endet am Nullpunkt". Nur bei einem HARTEN
-    Stopp (stop_event, z.B. weil ein anderes Programm sofort übernimmt,
-    siehe gui/my_gui.py: _run_program_async) entfällt das, da der
-    zusätzliche Umweg dort nur stören würde. build_calibration_program()
-    selbst läuft mit home_at_end=False (siehe gui/my_gui.py), weil es
-    ohnehin schon genau dorthin fährt.
+    `home_at_end` (Standard True): fährt am Ende zusätzlich HOME_POINT
+    (den Nullpunkt) an, bevor die Funktion zurückkehrt. Entfällt nur bei
+    einem harten stop_event-Stopp, da der Umweg dort nur stören würde.
 
-    `step_event` (optional, Entwicklermodus-Einzelschrittbetrieb, siehe
-    gui/my_gui.py): ist es gesetzt (nicht None), wird vor JEDEM Punkt
-    (inkl. des abschließenden Nullpunkts, falls home_at_end) gewartet, bis
-    ein Bedienstand über den "Nächster Punkt"-Button `step_event` setzt -
-    im Gegensatz zu `pause_event` also nicht nur "anhalten", sondern
-    "genau einen Punkt weiterfahren und wieder anhalten".
+    `step_event` (Entwicklermodus-Einzelschrittbetrieb): wartet vor jedem
+    Punkt, bis ein Bedienstand über den "Nächster Punkt"-Button das Event
+    setzt - anders als pause_event also "genau einen Punkt weiterfahren
+    und wieder anhalten".
 
-    `on_step_wait` (optional, siehe _wait_for_step): wird mit True/False
-    aufgerufen, sobald ein Einzelschritt-Warten beginnt/endet - Hook für
-    die GUI, um den "Nächster Punkt"-Button nur dann aktiv zu zeigen, wenn
-    er gerade wirklich etwas bewirkt.
+    `on_step_wait` (optional): True/False-Callback, sobald ein
+    Einzelschritt-Warten beginnt/endet.
 
-    `abort_event` (optional, sanfter Abbruch - Button 'Abbruch' in der GUI,
-    siehe on_abbruch_pressed): wird es gesetzt, werden die restlichen
-    Programmpunkte übersprungen, aber (anders als stop_event) noch der
-    Nullpunkt angefahren, BEVOR die Funktion zurückkehrt - "Abbruch endet
-    trotzdem sauber am Nullpunkt statt mitten in der Bewegung". Ein
-    zusätzlicher harter stop_event-Abbruch währenddessen (z.B. Ablösen
-    durch ein neues Programm) überstimmt das weiterhin sofort, ganz ohne
-    Nullpunkt-Rückfahrt.
+    `abort_event` (sanfter Abbruch, Button 'Abbruch'): überspringt die
+    restlichen Programmpunkte, fährt aber noch den Nullpunkt an, bevor die
+    Funktion zurückkehrt. Ein zusätzlicher harter stop_event-Abbruch
+    währenddessen überstimmt das weiterhin sofort.
 
     Gibt die zuletzt gesendete Gelenkpose zurück.
     """
@@ -687,11 +618,9 @@ def dry_run_program(program: Program) -> bool:
     simulierten Roboter zu senden.
 
     Nützlich, um neue/geänderte Punkte in einer JSON-Datei schnell zu
-    prüfen (IK-Lösbarkeit, Sprünge zwischen Punkten) - genau das, was beim
-    Debuggen von programs/beispiel_drehung.json von Hand gemacht wurde,
-    hier als fester CLI-Modus. Baut dafür nur das URDF (reines Python,
-    kein externes Tool nötig) und nutzt SAFE_STAGING_POSE als Start-Seed,
-    wie es die echte run_program()-Ausführung auch täte.
+    prüfen (IK-Lösbarkeit, Sprünge zwischen Punkten). Baut dafür nur das
+    URDF und nutzt SAFE_STAGING_POSE als Start-Seed, wie es die echte
+    run_program()-Ausführung auch täte.
 
     Gibt True zurück, wenn alle Punkte aufgelöst werden konnten.
     """
