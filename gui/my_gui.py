@@ -22,7 +22,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import fr20_ceiling_gazebo as sim  # noqa: E402  (Import erst nach sys.path-Anpassung möglich)
 import fr20_kinematics as kin  # noqa: E402
 import robot_program as rp  # noqa: E402
-import tube_rotation as rt  # noqa: E402
+import bending_head_motor as bhm  # noqa: E402
 
 PROGRAM_GELENKPOSE = REPO_ROOT / "programs" / "beispiel_gelenkpose.json"
 PROGRAM_TISCH = REPO_ROOT / "programs" / "beispiel_tisch.json"
@@ -39,7 +39,7 @@ JOG_REPEAT_MS = 150
 # Anzeigetext -> tatsächlicher Wert. dict statt Liste, damit combo.get()
 # direkt als Schlüssel für den passenden Wert dient.
 JOG_STEP_OPTIONS = {"1 mm": 0.001, "1 cm": 0.01, "5 cm": 0.05, "10 cm": 0.10}
-TUBE_JOG_STEP_OPTIONS = {"1°": 1.0, "5°": 5.0, "10°": 10.0, "20°": 20.0}
+BENDING_JOG_STEP_OPTIONS = {"1°": 1.0, "5°": 5.0, "10°": 10.0, "20°": 20.0}
 FONT_SIZE_OPTIONS = {"Klein": 9, "Mittel": 11, "Groß": 14}
 ZOOM_OPTIONS = {"100%": 1.0, "125%": 1.25, "150%": 1.5}
 # Tcl/Tk-Basis-Skalierung bei 100% (typischer Wert für 96dpi-Bildschirme) -
@@ -81,10 +81,10 @@ class MyApp:
         # _palette()/_apply_style unten).
         self._jog_step_m = JOG_STEP_M
         self._jog_rotation_step_deg = 5.0
-        # Schrittweite für die Jog-Pfeile der Rohr-Rotationsachse (siehe
-        # _rotation_jog_step/combo_tube_jogstep) - eigene Einstellung, da
-        # das ein anderes Gelenk als der Arm-Werkzeug-Jog (j6) ist.
-        self._tube_jog_step_deg = 5.0
+        # Schrittweite für die Jog-Pfeile des Biegekopf-Testlaufs (siehe
+        # _bending_jog_step/combo_biegekopf_jogstep) - eigene Einstellung, da
+        # das ein anderer Motor als der Arm-Werkzeug-Jog (j6) ist.
+        self._bending_jog_step_size = 5.0
         self._font_size = FONT_SIZE_OPTIONS["Mittel"]
         self._dark_mode = False
         self._zoom = ZOOM_OPTIONS["100%"]
@@ -144,22 +144,22 @@ class MyApp:
         # und ein gleichzeitiger Button-Klick gz-sim doppelt starten.
         self._sim_lock = threading.Lock()
 
-        # Eigener, unabhängiger Thread für den Rohrdrehungs-Testlauf (siehe
-        # on_rohrdrehung_pressed) - bewusst nicht self._program_thread, da
-        # die Rotationsachse ein anderes Gelenk als der FR20-Arm ist und
+        # Eigener, unabhängiger Thread für den Biegekopf-Testlauf (siehe
+        # on_biegekopf_pressed) - bewusst nicht self._program_thread, da der
+        # Biegekopf-Motor ein anderer Antrieb als der FR20-Arm ist und
         # parallel zu einem Arm-Programm laufen darf.
-        self._rotation_thread: threading.Thread | None = None
-        self._rotation_stop_event: threading.Event | None = None
-        # Gesetzt = Rohrdrehungs-Testlauf pausiert, analog zu
+        self._bending_thread: threading.Thread | None = None
+        self._bending_stop_event: threading.Event | None = None
+        # Gesetzt = Biegekopf-Testlauf pausiert, analog zu
         # self._pause_event - während der Pause darf per Jog-Pfeilen
-        # manuell weitergedreht werden.
-        self._rotation_pause_event = threading.Event()
+        # manuell weitergefahren werden.
+        self._bending_pause_event = threading.Event()
         # Aktive Achse des laufenden Testlaufs, None solange keiner läuft -
         # wird von den Jog-Pfeilen während einer Pause direkt angesprochen.
-        self._rotation_axis: "rt.TubeRotationAxis | None" = None
-        self._rotation_current_deg = 0.0
-        self._rotation_pose_lock = threading.Lock()
-        self._rotation_jog_after_id = None
+        self._bending_axis: "bhm.BendingHeadAxis | None" = None
+        self._bending_current_position = 0.0
+        self._bending_pose_lock = threading.Lock()
+        self._bending_jog_after_id = None
 
         # Zuletzt gesendete Gelenkpose (Gelenkwinkel in rad) - wird von den
         # Jog-Buttons (X+/X-/Y+/Y-) als Ausgangspunkt für den nächsten
@@ -382,7 +382,7 @@ class MyApp:
         for attr in (
             "mainwindow", "window_testen", "window_programm",
             "window_kalibrierung", "window_optionen", "window_manuell", "window_log",
-            "window_rohrdrehung",
+            "window_biegekopf",
         ):
             window = getattr(self, attr, None)
             if window is not None:
@@ -732,11 +732,11 @@ class MyApp:
                 if getattr(self, window_attr, None) is not None:
                     self.builder.get_object(label_id, self.mainwindow).configure(text=text)
 
-        if getattr(self, "window_rohrdrehung", None) is not None:
-            with self._rotation_pose_lock:
-                rotation_deg = self._rotation_current_deg
-            self.builder.get_object("label_rohrdrehung_position", self.mainwindow).configure(
-                text=f"Winkel: {rotation_deg:+.1f}°"
+        if getattr(self, "window_biegekopf", None) is not None:
+            with self._bending_pose_lock:
+                bending_position = self._bending_current_position
+            self.builder.get_object("label_biegekopf_position", self.mainwindow).configure(
+                text=f"Winkel: {bending_position:+.1f}°"
             )
 
         self.mainwindow.after(300, self._update_position_readout)
@@ -965,166 +965,173 @@ class MyApp:
         der Tischplatte an und dreht dort einmal den Werkzeugkopf (yaw 360°)."""
         self._run_figure_program(PROGRAM_ECKEN)
 
-    def on_rohrdrehung_pressed(self):
-        """Button 'Rohrdrehung testen' (button_platzhalter im Hauptfenster,
+    def on_biegekopf_pressed(self):
+        """Button 'Biegekopf testen' (button_platzhalter im Hauptfenster,
         vorher ungenutzte vierte Kachel): reiner Achsen-Testlauf für die
-        Rohr-Rotationsachse (siehe tube_rotation.py) - dreht zuerst 180° in
-        eine Richtung, dann 360° in die andere, unabhängig vom FR20-Arm.
-        Dient zum Sichtprüfen der Achse in Gazebo.
+        Biegekopf-Testachse in Gazebo (siehe bending_head_motor.py,
+        GazeboBendingBackend) - dreht zuerst 180° in eine Richtung, dann
+        360° in die andere, unabhängig vom FR20-Arm. Dient zum Sichtprüfen
+        der Achse in Gazebo.
 
-        Öffnet window_rohrdrehung (analog zu _run_figure_program beim Arm)
-        mit Live-Winkelanzeige, Pause/Weiter/Abbruch und zwei Jog-Pfeilen
-        zum manuellen Nachdrehen während einer Pause. Läuft in einem
-        eigenen Hintergrund-Thread (self._rotation_thread, nicht
-        self._program_thread), da die Rotationsachse ein anderes Gelenk
-        als der Arm ist und parallel zu einem Arm-Programm laufen darf."""
-        if self._rotation_thread is not None and self._rotation_thread.is_alive():
-            print("Rohrdrehungs-Testlauf läuft bereits.")
+        Nutzt bewusst GazeboBendingBackend statt ModbusRTUBendingBackend:
+        die echten Modbus-Register für den MCDLN35SG sind noch nicht final
+        (siehe TODOs in bending_head_motor.py) - ein "Testen"-Button in der
+        GUI darf nicht versehentlich den echten, drehmomentstarken Servo
+        ansteuern, solange das nicht sauber verdrahtet ist. Die simulierte
+        Testachse ist KEIN Nachbau des realen Biegekopfs, nur ein
+        Platzhalter für Kinematik-/Zeitablauf-Tests.
+
+        Öffnet window_biegekopf (analog zu _run_figure_program beim Arm) mit
+        Live-Positionsanzeige, Pause/Weiter/Abbruch und zwei Jog-Pfeilen zum
+        manuellen Nachfahren während einer Pause. Läuft in einem eigenen
+        Hintergrund-Thread (self._bending_thread, nicht self._program_thread),
+        da der Biegekopf-Motor ein anderer Antrieb als der Arm ist und
+        parallel zu einem Arm-Programm laufen darf."""
+        if self._bending_thread is not None and self._bending_thread.is_alive():
+            print("Biegekopf-Testlauf läuft bereits.")
             return
 
         self.mainwindow.withdraw()
-        if getattr(self, "window_rohrdrehung", None) is None:
-            self.window_rohrdrehung = self.builder.get_object("window_rohrdrehung", self.mainwindow)
+        if getattr(self, "window_biegekopf", None) is None:
+            self.window_biegekopf = self.builder.get_object("window_biegekopf", self.mainwindow)
             self.builder.connect_callbacks(self)
-            self.window_rohrdrehung.configure(background=self._palette()["bg"])
-            self._style_widget("label_rohrdrehung_status", "Title.TLabel")
-            self._style_widget("label_rohrdrehung_position", "Readout.TLabel")
-            self._style_widget("frame_jog_rohrdrehung", "Card.TLabelframe")
-            self._style_widget("frame_ablauf_rohrdrehung", "Card.TLabelframe")
-            self._style_widget("button_rohrdrehung_pause", "Warning.TButton")
-            self._style_widget("button_rohrdrehung_weiter", "Success.TButton")
-            self._style_widget("button_rohrdrehung_abbruch", "Danger.TButton")
+            self.window_biegekopf.configure(background=self._palette()["bg"])
+            self._style_widget("label_biegekopf_status", "Title.TLabel")
+            self._style_widget("label_biegekopf_position", "Readout.TLabel")
+            self._style_widget("frame_jog_biegekopf", "Card.TLabelframe")
+            self._style_widget("frame_ablauf_biegekopf", "Card.TLabelframe")
+            self._style_widget("button_biegekopf_pause", "Warning.TButton")
+            self._style_widget("button_biegekopf_weiter", "Success.TButton")
+            self._style_widget("button_biegekopf_abbruch", "Danger.TButton")
             for widget_id, sign in (
-                ("button_rohrdrehung_jog_minus", -1),
-                ("button_rohrdrehung_jog_plus", 1),
+                ("button_biegekopf_jog_minus", -1),
+                ("button_biegekopf_jog_plus", 1),
             ):
                 widget = self.builder.get_object(widget_id, self.mainwindow)
-                widget.bind("<ButtonPress-1>", lambda event, s=sign: self._hold_rotation_jog(s))
-                widget.bind("<ButtonRelease-1>", lambda event: self._release_rotation_jog())
+                widget.bind("<ButtonPress-1>", lambda event, s=sign: self._hold_bending_jog(s))
+                widget.bind("<ButtonRelease-1>", lambda event: self._release_bending_jog())
                 widget.configure(style="Jog.TButton")
-            self._make_responsive(self.window_rohrdrehung, self.builder.get_object("frame_rohrdrehung"))
-            self._fit_window_to_screen(self.window_rohrdrehung)
+            self._make_responsive(self.window_biegekopf, self.builder.get_object("frame_biegekopf"))
+            self._fit_window_to_screen(self.window_biegekopf)
         else:
-            self.window_rohrdrehung.deiconify()
+            self.window_biegekopf.deiconify()
 
-        self._rotation_pause_event.clear()
-        with self._rotation_pose_lock:
-            self._rotation_current_deg = 0.0
+        self._bending_pause_event.clear()
+        with self._bending_pose_lock:
+            self._bending_current_position = 0.0
         stop_event = threading.Event()
-        self._rotation_stop_event = stop_event
+        self._bending_stop_event = stop_event
 
-        def on_angle_changed(deg: float) -> None:
-            with self._rotation_pose_lock:
-                self._rotation_current_deg = deg
+        def on_position_changed(position: float) -> None:
+            with self._bending_pose_lock:
+                self._bending_current_position = position
 
         def settle_s(delta_deg: float) -> float:
             # dieselben Sicherheitsfaktoren wie robot_program._min_settle_time
             delta_rad = abs(math.radians(delta_deg))
-            return delta_rad / (sim.TUBE_ROTATION_VELOCITY_RAD_S * 0.6) + 0.4
+            return delta_rad / (sim.BENDING_HEAD_VELOCITY_RAD_S * 0.6) + 0.4
 
         def back_to_main() -> None:
-            self.window_rohrdrehung.withdraw()
+            self.window_biegekopf.withdraw()
             self.mainwindow.deiconify()
 
         def worker() -> None:
             try:
                 publishers = self._ensure_simulation_running()
-                axis = rt.TubeRotationAxis(rt.GazeboRotationBackend(publishers))
-                self._rotation_axis = axis
-                print("Rohrdrehungs-Testlauf gestartet: 180°, dann -360°.")
-                rt.run_rotation_sequence(
+                axis = bhm.BendingHeadAxis(bhm.GazeboBendingBackend(publishers))
+                self._bending_axis = axis
+                print("Biegekopf-Testlauf gestartet: 180°, dann -360°.")
+                bhm.run_bending_test_sequence(
                     axis,
                     steps=[180.0, -360.0],
                     stop_event=stop_event,
-                    pause_event=self._rotation_pause_event,
-                    on_angle_changed=on_angle_changed,
+                    pause_event=self._bending_pause_event,
+                    on_position_changed=on_position_changed,
                     settle_s=settle_s,
                 )
                 if not stop_event.is_set():
-                    print("Rohrdrehungs-Testlauf beendet.")
+                    print("Biegekopf-Testlauf beendet.")
             except Exception as exc:  # noqa: BLE001 - im Hintergrund-Thread sichtbar loggen
-                print(f"Fehler beim Rohrdrehungs-Testlauf: {exc}")
+                print(f"Fehler beim Biegekopf-Testlauf: {exc}")
                 traceback.print_exc()
             finally:
-                self._rotation_axis = None
+                self._bending_axis = None
                 if not stop_event.is_set():
                     self.mainwindow.after(0, back_to_main)
 
-        self._rotation_thread = threading.Thread(target=worker, daemon=True)
-        self._rotation_thread.start()
+        self._bending_thread = threading.Thread(target=worker, daemon=True)
+        self._bending_thread.start()
 
-    def on_rohrdrehung_pause_pressed(self):
-        """Button 'Pause' in window_rohrdrehung: pausiert den laufenden
-        Rohrdrehungs-Testlauf, damit die Jog-Pfeile die Achse übernehmen
-        können - analog zu on_pause_pressed beim Arm."""
-        if self._rotation_thread is None or not self._rotation_thread.is_alive():
-            print("Kein Rohrdrehungs-Testlauf läuft gerade - Pause hat nichts zu tun.")
+    def on_biegekopf_pause_pressed(self):
+        """Button 'Pause' in window_biegekopf: pausiert den laufenden
+        Biegekopf-Testlauf, damit die Jog-Pfeile den Motor übernehmen können
+        - analog zu on_pause_pressed beim Arm."""
+        if self._bending_thread is None or not self._bending_thread.is_alive():
+            print("Kein Biegekopf-Testlauf läuft gerade - Pause hat nichts zu tun.")
             return
-        self._rotation_pause_event.set()
-        print("Rohrdrehung pausiert - Jog-Pfeile sind jetzt aktiv.")
+        self._bending_pause_event.set()
+        print("Biegekopf-Testlauf pausiert - Jog-Pfeile sind jetzt aktiv.")
 
-    def on_rohrdrehung_weiter_pressed(self):
-        """Button 'Weiter' in window_rohrdrehung: hebt die Pause auf, der
+    def on_biegekopf_weiter_pressed(self):
+        """Button 'Weiter' in window_biegekopf: hebt die Pause auf, der
         Testlauf macht ab der zuletzt (ggf. per Jog geänderten) Stellung
         weiter."""
-        if not self._rotation_pause_event.is_set():
-            print("Rohrdrehung ist nicht pausiert - nichts zu tun.")
+        if not self._bending_pause_event.is_set():
+            print("Biegekopf-Testlauf ist nicht pausiert - nichts zu tun.")
             return
-        self._rotation_pause_event.clear()
-        print("Rohrdrehung wird fortgesetzt.")
+        self._bending_pause_event.clear()
+        print("Biegekopf-Testlauf wird fortgesetzt.")
 
-    def on_rohrdrehung_abbruch_pressed(self):
-        """Button 'Abbruch' in window_rohrdrehung: bricht den Testlauf
-        sofort und endgültig ab (kein Nullpunkt-Konzept bei dieser Achse,
-        anders als beim Arm - einfach ein sofortiger Stopp) und kehrt zum
-        Hauptfenster zurück."""
-        if self._rotation_thread is None or not self._rotation_thread.is_alive():
-            print("Kein Rohrdrehungs-Testlauf läuft gerade - Abbruch hat nichts zu tun.")
+    def on_biegekopf_abbruch_pressed(self):
+        """Button 'Abbruch' in window_biegekopf: bricht den Testlauf sofort
+        und endgültig ab und kehrt zum Hauptfenster zurück."""
+        if self._bending_thread is None or not self._bending_thread.is_alive():
+            print("Kein Biegekopf-Testlauf läuft gerade - Abbruch hat nichts zu tun.")
             return
-        self._rotation_pause_event.clear()  # sonst würde run_rotation_sequence auf die Pause warten
-        self._rotation_stop_event.set()
-        self._rotation_thread.join(timeout=5.0)
-        print("Rohrdrehungs-Testlauf abgebrochen.")
-        self.window_rohrdrehung.withdraw()
+        self._bending_pause_event.clear()  # sonst würde run_bending_test_sequence auf die Pause warten
+        self._bending_stop_event.set()
+        self._bending_thread.join(timeout=5.0)
+        print("Biegekopf-Testlauf abgebrochen.")
+        self.window_biegekopf.withdraw()
         self.mainwindow.deiconify()
 
-    def _rotation_jog_step(self, sign: float) -> bool:
-        """Dreht die Rohr-Rotationsachse manuell um einen kleinen Schritt
-        (Schrittweite: self._tube_jog_step_deg) - nur erlaubt, während ein
-        laufender Testlauf pausiert ist, dasselbe Prinzip wie beim Arm-Jog
-        (_jog). Gibt True zurück, wenn der Schritt gesendet wurde."""
+    def _do_bending_jog_step(self, sign: float) -> bool:
+        """Fährt den Biegekopf-Motor manuell um einen kleinen Schritt
+        (Schrittweite: self._bending_jog_step_size) - nur erlaubt, während
+        ein laufender Testlauf pausiert ist, dasselbe Prinzip wie beim
+        Arm-Jog (_jog). Gibt True zurück, wenn der Schritt gesendet wurde."""
         if (
-            self._rotation_thread is not None
-            and self._rotation_thread.is_alive()
-            and not self._rotation_pause_event.is_set()
+            self._bending_thread is not None
+            and self._bending_thread.is_alive()
+            and not self._bending_pause_event.is_set()
         ):
-            print("Rohrdrehungs-Jog ignoriert: Testlauf läuft gerade - erst 'Pause' drücken.")
+            print("Biegekopf-Jog ignoriert: Testlauf läuft gerade - erst 'Pause' drücken.")
             return False
-        if self._rotation_axis is None:
-            print("Rohrdrehungs-Jog ignoriert: keine Achse aktiv.")
+        if self._bending_axis is None:
+            print("Biegekopf-Jog ignoriert: keine Achse aktiv.")
             return False
-        new_angle = self._rotation_axis.rotate_by(sign * self._tube_jog_step_deg)
-        with self._rotation_pose_lock:
-            self._rotation_current_deg = new_angle
+        new_position = self._bending_axis.move_by(sign * self._bending_jog_step_size)
+        with self._bending_pose_lock:
+            self._bending_current_position = new_position
         return True
 
-    def _hold_rotation_jog(self, sign: float) -> None:
-        """Wie _hold_jog, aber für die Rotationsachsen-Jog-Pfeile - fährt
-        sofort einen Schritt und plant sich danach per after() alle
-        JOG_REPEAT_MS erneut ein, solange der Button gehalten wird."""
-        if not self._rotation_jog_step(sign):
-            self._rotation_jog_after_id = None
+    def _hold_bending_jog(self, sign: float) -> None:
+        """Wie _hold_jog, aber für die Biegekopf-Jog-Pfeile - fährt sofort
+        einen Schritt und plant sich danach per after() alle JOG_REPEAT_MS
+        erneut ein, solange der Button gehalten wird."""
+        if not self._do_bending_jog_step(sign):
+            self._bending_jog_after_id = None
             return
-        self._rotation_jog_after_id = self.mainwindow.after(
-            JOG_REPEAT_MS, lambda: self._hold_rotation_jog(sign)
+        self._bending_jog_after_id = self.mainwindow.after(
+            JOG_REPEAT_MS, lambda: self._hold_bending_jog(sign)
         )
 
-    def _release_rotation_jog(self) -> None:
-        """Beendet die per _hold_rotation_jog gestartete Wiederholung
+    def _release_bending_jog(self) -> None:
+        """Beendet die per _hold_bending_jog gestartete Wiederholung
         (Loslassen eines Jog-Pfeils)."""
-        if self._rotation_jog_after_id is not None:
-            self.mainwindow.after_cancel(self._rotation_jog_after_id)
-            self._rotation_jog_after_id = None
+        if self._bending_jog_after_id is not None:
+            self.mainwindow.after_cancel(self._bending_jog_after_id)
+            self._bending_jog_after_id = None
 
     def on_testen_pressed(self):
         """Button 'Testen' im Hauptfenster: öffnet window_testen (analog zu
@@ -1191,14 +1198,14 @@ class MyApp:
             combo_zoom.set(next(k for k, v in ZOOM_OPTIONS.items() if v == self._zoom))
             combo_zoom.bind("<<ComboboxSelected>>", lambda e: self._on_zoom_selected(combo_zoom.get()))
 
-            combo_tube_jogstep = self.builder.get_object("combo_tube_jogstep", self.mainwindow)
-            combo_tube_jogstep["values"] = list(TUBE_JOG_STEP_OPTIONS.keys())
-            combo_tube_jogstep.state(["readonly"])
-            combo_tube_jogstep.set(
-                next(k for k, v in TUBE_JOG_STEP_OPTIONS.items() if v == self._tube_jog_step_deg)
+            combo_biegekopf_jogstep = self.builder.get_object("combo_biegekopf_jogstep", self.mainwindow)
+            combo_biegekopf_jogstep["values"] = list(BENDING_JOG_STEP_OPTIONS.keys())
+            combo_biegekopf_jogstep.state(["readonly"])
+            combo_biegekopf_jogstep.set(
+                next(k for k, v in BENDING_JOG_STEP_OPTIONS.items() if v == self._bending_jog_step_size)
             )
-            combo_tube_jogstep.bind(
-                "<<ComboboxSelected>>", lambda e: self._on_tube_jogstep_selected(combo_tube_jogstep.get())
+            combo_biegekopf_jogstep.bind(
+                "<<ComboboxSelected>>", lambda e: self._on_biegekopf_jogstep_selected(combo_biegekopf_jogstep.get())
             )
 
             self._style_widget(
@@ -1240,13 +1247,13 @@ class MyApp:
         self._jog_step_m = JOG_STEP_OPTIONS[label]
         print(f"Jog-Schrittweite: {label}")
 
-    def _on_tube_jogstep_selected(self, label: str) -> None:
-        """Callback der combo_tube_jogstep-Combobox (siehe on_optionen_pressed) -
-        self._tube_jog_step_deg wird von _rotation_jog_step bei jedem
-        Tastendruck der Rohrdrehungs-Jog-Pfeile frisch gelesen, wirkt also
+    def _on_biegekopf_jogstep_selected(self, label: str) -> None:
+        """Callback der combo_biegekopf_jogstep-Combobox (siehe on_optionen_pressed) -
+        self._bending_jog_step_size wird von _do_bending_jog_step bei jedem
+        Tastendruck der Biegekopf-Jog-Pfeile frisch gelesen, wirkt also
         sofort auf den nächsten Schritt."""
-        self._tube_jog_step_deg = TUBE_JOG_STEP_OPTIONS[label]
-        print(f"Rohrdrehung-Schrittweite: {label}")
+        self._bending_jog_step_size = BENDING_JOG_STEP_OPTIONS[label]
+        print(f"Biegekopf-Schrittweite: {label}")
 
     def _on_schriftgroesse_selected(self, label: str) -> None:
         """Callback der combo_schriftgroesse-Combobox: setzt die
@@ -1462,13 +1469,13 @@ class MyApp:
     def on_close(self):
         # zentrale Aufräum-Routine: Jog stoppen, Programm abbrechen, Gazebo beenden, Fenster schließen
         self._release_jog()
-        self._release_rotation_jog()
+        self._release_bending_jog()
         self._stop_running_program()
-        if self._rotation_thread is not None and self._rotation_thread.is_alive():
-            self._rotation_pause_event.clear()
-            if self._rotation_stop_event is not None:
-                self._rotation_stop_event.set()
-            self._rotation_thread.join(timeout=5.0)
+        if self._bending_thread is not None and self._bending_thread.is_alive():
+            self._bending_pause_event.clear()
+            if self._bending_stop_event is not None:
+                self._bending_stop_event.set()
+            self._bending_thread.join(timeout=5.0)
         if self._gz_proc is not None:
             sim.shutdown_simulation(self._gz_proc)
         self.mainwindow.destroy()

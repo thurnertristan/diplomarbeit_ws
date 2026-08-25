@@ -69,18 +69,36 @@ alle kartesischen Programmpunkte angewendet (`robot_program.run_program`).
 Gelenkpose-Punkte (`joints`) sind davon nicht betroffen, ebenso wenig die
 Jog-Buttons selbst.
 
-## Rohr-Rotationsachse und Biegekraft-Abschätzung
+## Biegekopf-Motor und Biegekraft-Abschätzung
 
-`tube_rotation.py` steuert den Motor an, der das eingespannte Rohr
-zwischen zwei Biegungen um einen Drehwinkel weiterdreht - die Hardware
-steht noch nicht fest, deshalb ist die Ansteuerung von der Kommunikation
-mit dem Motor getrennt (austauschbares "Backend"):
+Der Biegekopf wird von genau einem realen Servo angetrieben (Panasonic
+MSMF082L1U1 + Verstärker Panasonic MCDLN35SG), angesteuert über
+Modbus-RTU/RS485 (115200 Baud, 8N1, USB-RS485-Konverter). `bending_head_motor.py`
+übernimmt diese Ansteuerung - wie bei anderer Motor-Hardware in diesem
+Repo ist die Kommunikation von der Steuerlogik getrennt (austauschbares
+"Backend"):
 
 ```
-python3 tube_rotation.py 45 --simulate            # nur loggen, ohne Hardware
-python3 tube_rotation.py 45 --gazebo --headless   # in der Simulation drehen
-python3 tube_rotation.py 45 --port /dev/ttyUSB0   # echter Schrittmotor an einem Mikrocontroller
+python3 bending_head_motor.py 45 --simulate            # nur loggen, ohne Hardware
+python3 bending_head_motor.py 45 --gazebo --headless   # simulierte Testachse in Gazebo drehen
+python3 bending_head_motor.py 45 --port /dev/ttyUSB0   # echter Servo über Modbus-RTU
 ```
+
+Die `--gazebo`-Testachse (siehe `GazeboBendingBackend`) ist kein Nachbau
+des realen Biegekopfs, sondern ein einfacher Platzhalter (Ständer +
+drehbare Welle, wie zuvor die Rotationsachsen-Testachse) - sie dient nur
+dazu, Kinematik/Zeitablauf im Zusammenspiel mit dem FR20-Arm zu prüfen,
+solange die Modbus-Register des realen Servos noch nicht final sind. In
+der GUI startet der Button "Biegekopf testen" denselben Testlauf.
+
+Die exakten Modbus-Register (Sollposition, Solldrehzahl, Drehmoment-Limit,
+Control-/Status-Word) sind noch nicht final und stehen als TODO-Platzhalter
+in `ModbusRTUBendingBackend` - ohne sie wirft der reale Betrieb bewusst
+`NotImplementedError`, statt mit geratenen Registern auf den Verstärker zu
+schreiben. Das Drehmoment-Limit MUSS beim Verbindungsaufbau gesetzt werden:
+laut `biegekraft_rechner.py`-Abschätzung liegt das gemessene Biegemoment
+(~230 Nm) sehr nah an der angenommenen Drivetrain-Kapazität (~225 Nm) - die
+Sicherheitsmarge ist praktisch null.
 
 `biegekraft_rechner.py` schätzt aus Rohr-Außendurchmesser, Wandstärke und
 Werkstoff das nötige Biegemoment und daraus (mit Getriebeübersetzung,

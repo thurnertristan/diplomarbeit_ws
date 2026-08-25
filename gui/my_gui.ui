@@ -115,7 +115,7 @@
         </child>
         <child>
           <object class="ttk.Label" id="label_platzhalter_caption">
-            <property name="text" translatable="yes">Rohrdrehung testen (Achsen-Test)</property>
+            <property name="text" translatable="yes">Biegekopf testen (Achsen-Test)</property>
             <layout manager="grid">
               <property name="column">1</property>
               <property name="padx">20</property>
@@ -140,7 +140,7 @@
         </child>
         <child>
           <object class="ttk.Button" id="button_platzhalter">
-            <property name="command" type="command" cbtype="simple">on_rohrdrehung_pressed</property>
+            <property name="command" type="command" cbtype="simple">on_biegekopf_pressed</property>
             <property name="image">platzhalter_neu.png</property>
             <layout manager="grid">
               <property name="column">1</property>
@@ -326,7 +326,7 @@
             </child>
             <child>
               <object class="ttk.Label" id="label_setting_tube_jogstep">
-                <property name="text" translatable="yes">Rohrdrehung-Schrittweite:</property>
+                <property name="text" translatable="yes">Biegekopf-Schrittweite:</property>
                 <layout manager="grid">
                   <property name="column">0</property>
                   <property name="padx">4</property>
@@ -337,7 +337,7 @@
               </object>
             </child>
             <child>
-              <object class="ttk.Combobox" id="combo_tube_jogstep">
+              <object class="ttk.Combobox" id="combo_biegekopf_jogstep">
                 <layout manager="grid">
                   <property name="column">1</property>
                   <property name="padx">4</property>
@@ -1106,12 +1106,12 @@
       </object>
     </child>
   </object>
-  <object class="tk.Toplevel" id="window_rohrdrehung" named="True">
+  <object class="tk.Toplevel" id="window_biegekopf" named="True">
     <property name="height">360</property>
-    <property name="title" translatable="yes">Rohrdrehung</property>
+    <property name="title" translatable="yes">Biegekopf</property>
     <property name="width">420</property>
     <child>
-      <object class="ttk.Frame" id="frame_rohrdrehung" named="True">
+      <object class="ttk.Frame" id="frame_biegekopf" named="True">
         <property name="height">360</property>
         <property name="width">420</property>
         <layout manager="grid">
@@ -1121,8 +1121,8 @@
           <property name="row">0</property>
         </layout>
         <child>
-          <object class="ttk.Label" id="label_rohrdrehung_status">
-            <property name="text" translatable="yes">Rohrdrehung läuft ...</property>
+          <object class="ttk.Label" id="label_biegekopf_status">
+            <property name="text" translatable="yes">Biegekopf läuft ...</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="columnspan">2</property>
@@ -1134,7 +1134,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Label" id="label_rohrdrehung_position">
+          <object class="ttk.Label" id="label_biegekopf_position">
             <property name="text" translatable="yes">Winkel: +0.0°</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -1147,8 +1147,8 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Labelframe" id="frame_jog_rohrdrehung">
-            <property name="text" translatable="yes">Manuell drehen (nur während Pause)</property>
+          <object class="ttk.Labelframe" id="frame_jog_biegekopf">
+            <property name="text" translatable="yes">Manuell fahren (nur während Pause)</property>
             <layout manager="grid">
               <property name="column">0</property>
               <property name="columnspan">2</property>
@@ -1158,7 +1158,7 @@
               <property name="sticky">nsew</property>
             </layout>
             <child>
-              <object class="ttk.Button" id="button_rohrdrehung_jog_minus">
+              <object class="ttk.Button" id="button_biegekopf_jog_minus">
                 <property name="text" translatable="yes">⟲</property>
                 <layout manager="grid">
                   <property name="column">0</property>
@@ -1170,7 +1170,7 @@
               </object>
             </child>
             <child>
-              <object class="ttk.Button" id="button_rohrdrehung_jog_plus">
+              <object class="ttk.Button" id="button_biegekopf_jog_plus">
                 <property name="text" translatable="yes">⟳</property>
                 <layout manager="grid">
                   <property name="column">1</property>
@@ -1184,7 +1184,7 @@
           </object>
         </child>
         <child>
-          <object class="ttk.Labelframe" id="frame_ablauf_rohrdrehung">
+          <object class="ttk.Labelframe" id="frame_ablauf_biegekopf">
             <property name="text" translatable="yes">Ablaufsteuerung</property>
             <layout manager="grid">
               <property name="column">0</property>
@@ -1195,8 +1195,8 @@
               <property name="sticky">nsew</property>
             </layout>
             <child>
-              <object class="ttk.Button" id="button_rohrdrehung_pause">
-                <property name="command" type="command" cbtype="simple">on_rohrdrehung_pause_pressed</property>
+              <object class="ttk.Button" id="button_biegekopf_pause">
+                <property name="command" type="command" cbtype="simple">on_biegekopf_pause_pressed</property>
                 <property name="text" translatable="yes">⏸ Pause</property>
                 <layout manager="grid">
                   <property name="column">0</property>
@@ -1208,8 +1208,8 @@
               </object>
             </child>
             <child>
-              <object class="ttk.Button" id="button_rohrdrehung_weiter">
-                <property name="command" type="command" cbtype="simple">on_rohrdrehung_weiter_pressed</property>
+              <object class="ttk.Button" id="button_biegekopf_weiter">
+                <property name="command" type="command" cbtype="simple">on_biegekopf_weiter_pressed</property>
                 <property name="text" translatable="yes">▶ Weiter</property>
                 <layout manager="grid">
                   <property name="column">1</property>
@@ -1221,8 +1221,8 @@
               </object>
             </child>
             <child>
-              <object class="ttk.Button" id="button_rohrdrehung_abbruch">
-                <property name="command" type="command" cbtype="simple">on_rohrdrehung_abbruch_pressed</property>
+              <object class="ttk.Button" id="button_biegekopf_abbruch">
+                <property name="command" type="command" cbtype="simple">on_biegekopf_abbruch_pressed</property>
                 <property name="text" translatable="yes">✕ Abbruch</property>
                 <layout manager="grid">
                   <property name="column">2</property>

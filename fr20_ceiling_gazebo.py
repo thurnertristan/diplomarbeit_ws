@@ -45,6 +45,8 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import bending_head_motor as bhm
+
 # Verschiedene Gazebo-Versionen benennen ihre Python-Bindings unterschiedlich:
 # manche unversioniert (z.B. "gz.transport" bei Gazebo Jetty/gz-sim10 in
 # unseren Tests), andere versioniert (z.B. "gz.transport13" bei Gazebo
@@ -209,49 +211,49 @@ JOINT_VELOCITY_LIMIT_RAD_S = {
     "j6": 3.2,
 }
 
-# Rohr-Rotationsachse (Motor + Getriebe, dreht das eingespannte Rohr
-# zwischen zwei Biegungen weiter - siehe tube_rotation.py). Bewusst ein
-# einfacher Platzhalter (Ständer + drehbare Welle) statt eines Nachbaus der
-# realen Baugruppe: es geht hier nur um die Kinematik/den Zeitablauf der
-# Achse im Zusammenspiel mit dem FR20-Arm (siehe build_tube_rotation_model_sdf),
-# nicht um eine mechanische Nachbildung des Biegekopfs.
-TUBE_ROTATION_MODEL_NAME = "tube_rotation_axis"
-TUBE_ROTATION_JOINT_NAME = "rotate"
+# Biegekopf-Testachse (siehe bending_head_motor.py/GazeboBendingBackend):
+# Bewusst ein einfacher Platzhalter (Ständer + drehbare Welle) statt eines
+# Nachbaus des realen Biegekopfs - es geht hier nur um die Kinematik/den
+# Zeitablauf der Achse im Zusammenspiel mit dem FR20-Arm (siehe
+# build_bending_head_model_sdf), solange die Modbus-Register des realen
+# MCDLN35SG-Servos noch nicht final sind, nicht um eine mechanische
+# Nachbildung des Biegekopfs.
+BENDING_HEAD_MODEL_NAME = "bending_head_axis"
+BENDING_HEAD_JOINT_NAME = "bend"
 
-# Platzhalter-Werte, bis ein realer Motor/Getriebe feststeht - effort ist
-# das max. Ausgangsdrehmoment der Achse (Motor-Drehmoment * Übersetzung *
-# Wirkungsgrad, siehe biegekraft_rechner.py), velocity die max.
-# Winkelgeschwindigkeit der Achse. Einfach hier anpassen, sobald ein
-# konkreter Motor gewählt ist.
-TUBE_ROTATION_EFFORT_NM = 150.0
-TUBE_ROTATION_VELOCITY_RAD_S = 1.0
+# effort = das reale Drehmoment-Limit aus bending_head_motor.py (siehe dort
+# für die Herleitung/Warnung zur minimalen Sicherheitsmarge) - rein
+# informativ als Gelenkgrenze in der Simulation, KEIN Ersatz für das echte
+# Drehmoment-Limit am Verstärker. velocity ein Platzhalter, bis ein
+# konkretes Getriebe/Motorprofil feststeht.
+BENDING_HEAD_EFFORT_NM = bhm.TORQUE_LIMIT_NM
+BENDING_HEAD_VELOCITY_RAD_S = 1.0
 
 # Angenommene Trägheit der Welle um ihre eigene (Y-)Achse - deutlich höher
 # als eine dünne Platzhalter-Welle physisch hätte: bei zu kleiner Trägheit
 # treibt der Regler das Gelenk in eine aufschaukelnde Schwingung statt einer
 # sauberen Annäherung. 0.05 kg*m^2 entspricht ungefähr einem realen
 # Spannfutter+Welle+Getriebe und hält den Regler im linearen, gedämpften Bereich.
-TUBE_ROTATION_INERTIA_YY_KGM2 = 0.05
-TUBE_ROTATION_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für TUBE_ROTATION_INERTIA_YY_KGM2
+BENDING_HEAD_INERTIA_YY_KGM2 = 0.05
+BENDING_HEAD_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für BENDING_HEAD_INERTIA_YY_KGM2
 
-# Länge der Platzhalter-Welle (siehe build_tube_rotation_model_sdf) - eigene
+# Länge der Platzhalter-Welle (siehe build_bending_head_model_sdf) - eigene
 # Konstante, damit die Positionierung unten die Welle nachweislich mit
 # Abstand am Tisch vorbeiführt statt sie hineinzubauen (siehe
-# TUBE_ROTATION_XY/Z-Kommentar).
-TUBE_ROTATION_SHAFT_LENGTH_M = 0.4
+# BENDING_HEAD_XY/Z-Kommentar).
+BENDING_HEAD_SHAFT_LENGTH_M = 0.4
 
 # Position der Achse: neben dem Tisch, am Ende der Baugruppe entlang ihrer
-# langen Achse (Y-Richtung), dort wo ein Spannfutter das Rohr fassen würde.
-# Der Y-Abstand zur Tischkante ist bewusst größer als
-# TUBE_ROTATION_SHAFT_LENGTH_M, damit die Welle nicht ins Kollisionsvolumen
-# des Tisches hineinragt (sonst erzeugt die Physik-Engine Kontaktkräfte, die
-# das Gelenk unkontrolliert durchdrehen lassen). Z liegt aus demselben Grund
-# etwas über TABLE_TOP_Z.
-TUBE_ROTATION_XY = (
+# langen Achse (Y-Richtung), dort wo der Biegekopf ansetzen würde. Der
+# Y-Abstand zur Tischkante ist bewusst größer als BENDING_HEAD_SHAFT_LENGTH_M,
+# damit die Welle nicht ins Kollisionsvolumen des Tisches hineinragt (sonst
+# erzeugt die Physik-Engine Kontaktkräfte, die das Gelenk unkontrolliert
+# durchdrehen lassen). Z liegt aus demselben Grund etwas über TABLE_TOP_Z.
+BENDING_HEAD_XY = (
     TABLE_CENTER[0],
-    TABLE_CENTER[1] - TABLE_SIZE_XY[1] / 2 - TUBE_ROTATION_SHAFT_LENGTH_M - 0.1,
+    TABLE_CENTER[1] - TABLE_SIZE_XY[1] / 2 - BENDING_HEAD_SHAFT_LENGTH_M - 0.1,
 )
-TUBE_ROTATION_Z = TABLE_TOP_Z + 0.05
+BENDING_HEAD_Z = TABLE_TOP_Z + 0.05
 
 WORK_DIR = Path(__file__).resolve().parent / "gazebo_fr20_ceiling_generated"
 
@@ -403,27 +405,27 @@ def urdf_to_sdf_model(urdf_path: Path) -> str:
     return sdf_text[start:end]
 
 
-def build_tube_rotation_model_sdf() -> str:
-    """SDF-Modell für die Rohr-Rotationsachse (siehe TUBE_ROTATION_*-Konstanten
-    und tube_rotation.py): ein Ständer (fix mit der Welt verbunden) und eine
-    drehbare Welle, mit JointPositionController-Plugin wie bei den
-    FR20-Armgelenken - ansteuerbar über
-    /{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos.
+def build_bending_head_model_sdf() -> str:
+    """SDF-Modell für die Biegekopf-Testachse (siehe BENDING_HEAD_*-Konstanten
+    und bending_head_motor.GazeboBendingBackend): ein Ständer (fix mit der
+    Welt verbunden) und eine drehbare Welle, mit JointPositionController-
+    Plugin wie bei den FR20-Armgelenken - ansteuerbar über
+    /{BENDING_HEAD_MODEL_NAME}/{BENDING_HEAD_JOINT_NAME}/cmd_pos.
 
-    Bewusst ein Platzhalter (kein Nachbau der realen Baugruppe/des
-    Spannfutters); sobald Mechanik und Motor feststehen, Geometrie und
-    TUBE_ROTATION_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
+    Bewusst ein Platzhalter (kein Nachbau des realen Biegekopfs); sobald
+    Mechanik und Motor final feststehen, Geometrie und
+    BENDING_HEAD_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
 
     Die Welle rotiert um die Y-Achse - Link-Posen bleiben unrotiert, nur die
     Visual-/Kollisionsgeometrie der Welle wird für die Darstellung um 90°
     gekippt, damit Gelenk-Achsvektor und Trägheitsmoment im selben,
     unrotierten Bezugsrahmen bleiben.
     """
-    stand_height = TUBE_ROTATION_Z
-    shaft_length = TUBE_ROTATION_SHAFT_LENGTH_M
+    stand_height = BENDING_HEAD_Z
+    shaft_length = BENDING_HEAD_SHAFT_LENGTH_M
     shaft_radius = 0.02
-    shaft_mass = 5.0  # siehe TUBE_ROTATION_INERTIA_YY_KGM2 für die Begründung
-    p, i, d = TUBE_ROTATION_GAINS
+    shaft_mass = 5.0  # siehe BENDING_HEAD_INERTIA_YY_KGM2 für die Begründung
+    p, i, d = BENDING_HEAD_GAINS
 
     # Ein reiner Zylinder ist um seine eigene Längsachse rotationssymmetrisch -
     # dreht er sich genau um diese Achse, sieht man von außen keine Bewegung.
@@ -439,8 +441,8 @@ def build_tube_rotation_model_sdf() -> str:
     marker_y_offset = shaft_length / 2 - marker_length / 2 - 0.02
 
     return f"""
-    <model name="{TUBE_ROTATION_MODEL_NAME}">
-      <pose>{TUBE_ROTATION_XY[0]} {TUBE_ROTATION_XY[1]} 0 0 0 0</pose>
+    <model name="{BENDING_HEAD_MODEL_NAME}">
+      <pose>{BENDING_HEAD_XY[0]} {BENDING_HEAD_XY[1]} 0 0 0 0</pose>
       <link name="stand">
         <pose>0 0 {stand_height / 2} 0 0 0</pose>
         <collision name="collision"><geometry><box><size>0.1 0.1 {stand_height}</size></box></geometry></collision>
@@ -455,7 +457,7 @@ def build_tube_rotation_model_sdf() -> str:
           <mass>{shaft_mass}</mass>
           <inertia>
             <ixx>0.1</ixx>
-            <iyy>{TUBE_ROTATION_INERTIA_YY_KGM2}</iyy>
+            <iyy>{BENDING_HEAD_INERTIA_YY_KGM2}</iyy>
             <izz>0.1</izz>
             <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
           </inertia>
@@ -483,18 +485,18 @@ def build_tube_rotation_model_sdf() -> str:
         <parent>world</parent>
         <child>stand</child>
       </joint>
-      <joint name="{TUBE_ROTATION_JOINT_NAME}" type="revolute">
+      <joint name="{BENDING_HEAD_JOINT_NAME}" type="revolute">
         <parent>stand</parent>
         <child>shaft</child>
         <axis>
           <xyz>0 1 0</xyz>
-          <limit><effort>{TUBE_ROTATION_EFFORT_NM}</effort><velocity>{TUBE_ROTATION_VELOCITY_RAD_S}</velocity></limit>
+          <limit><effort>{BENDING_HEAD_EFFORT_NM}</effort><velocity>{BENDING_HEAD_VELOCITY_RAD_S}</velocity></limit>
         </axis>
       </joint>
       <plugin filename="gz-sim-joint-position-controller-system"
               name="gz::sim::systems::JointPositionController">
-        <joint_name>{TUBE_ROTATION_JOINT_NAME}</joint_name>
-        <topic>/{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos</topic>
+        <joint_name>{BENDING_HEAD_JOINT_NAME}</joint_name>
+        <topic>/{BENDING_HEAD_MODEL_NAME}/{BENDING_HEAD_JOINT_NAME}/cmd_pos</topic>
         <p_gain>{p}</p_gain>
         <i_gain>{i}</i_gain>
         <d_gain>{d}</d_gain>
@@ -631,7 +633,7 @@ def build_world_sdf(robot_model_sdf: str) -> str:
       </link>
     </model>
 
-{build_tube_rotation_model_sdf()}
+{build_bending_head_model_sdf()}
 
 {robot_model_sdf}
   </world>
@@ -712,10 +714,10 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     Null-Stellung) - Aufrufer entscheiden selbst, ob/wann sie z.B.
     send_to_safe_staging_pose() hinterherschicken.
 
-    `publishers` enthält neben den FR20-Armgelenken (j1..j6) auch einen
-    Eintrag "tube_rotation" für die Rohr-Rotationsachse (siehe
-    build_tube_rotation_model_sdf/tube_rotation.py) - vom Aufrufer genauso
-    per Double-Nachricht ansteuerbar wie die Armgelenke.
+    `publishers` enthält einen Eintrag pro FR20-Armgelenk (j1..j6) sowie
+    einen Eintrag "bending_head" für die Biegekopf-Testachse (siehe
+    build_bending_head_model_sdf/bending_head_motor.GazeboBendingBackend) -
+    vom Aufrufer genauso per Double-Nachricht ansteuerbar wie die Armgelenke.
 
     Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation()
     verwenden.
@@ -729,7 +731,7 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     urdf_path = WORK_DIR / f"{MODEL_NAME}.urdf"
     world_path = WORK_DIR / "world.sdf"
 
-    # URDF (Roboter) und SDF-Welt (Raum, Tisch, Achse, Roboter) erzeugen
+    # URDF (Roboter) und SDF-Welt (Raum, Tisch, Testachse, Roboter) erzeugen
     write_mount_urdf(urdf_path)
     append_joint_position_controllers(urdf_path)
     robot_model_sdf = urdf_to_sdf_model(urdf_path)
@@ -744,13 +746,13 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     wait_for_world(WORLD_NAME)
     time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
 
-    # Publisher pro Gelenk anlegen (plus einen für die Rohr-Rotationsachse)
+    # Publisher pro Gelenk anlegen (plus einen für die Biegekopf-Testachse)
     Node = import_gz("transport").Node
     Double = import_gz("msgs", "double_pb2").Double
     node = Node()
     publishers = {j: node.advertise(f"/{MODEL_NAME}/{j}/cmd_pos", Double) for j in JOINT_NAMES}
-    publishers["tube_rotation"] = node.advertise(
-        f"/{TUBE_ROTATION_MODEL_NAME}/{TUBE_ROTATION_JOINT_NAME}/cmd_pos", Double
+    publishers["bending_head"] = node.advertise(
+        f"/{BENDING_HEAD_MODEL_NAME}/{BENDING_HEAD_JOINT_NAME}/cmd_pos", Double
     )
     return gz_proc, publishers
 
