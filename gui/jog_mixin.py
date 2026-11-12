@@ -124,8 +124,10 @@ class JogMixin:
                 button.configure(text=button.cget("text").replace("▸", "▾"))
             # Fenster hat feste Größe (siehe _fit_window_to_screen) - Neuberechnung nötig,
             # sonst bleibt nach dem Einklappen eine leere Fläche stehen.
-            window.update_idletasks()
-            window.geometry(f"{window.winfo_reqwidth()}x{window.winfo_reqheight()}")
+            # Im Vollbild (Kiosk-Modus) bleibt das Fenster bildschirmfüllend, Inhalt zentriert.
+            if not self._kiosk:
+                window.update_idletasks()
+                window.geometry(f"{window.winfo_reqwidth()}x{window.winfo_reqheight()}")
 
         button.configure(command=toggle, style="JogToggle.TButton")
 

@@ -96,6 +96,8 @@ class OptionsMixin:
             checkbutton_einzelschritt.configure(variable=self._single_step_var)
             checkbutton_einzelschritt.state(["!disabled"] if self._dev_mode else ["disabled"])
 
+            if self._compact:
+                self._apply_compact_layout_options()
             self._make_responsive(self.window_optionen, self.builder.get_object("frame_optionen"))
             self._fit_window_to_screen(self.window_optionen)
         else:
@@ -152,7 +154,7 @@ class OptionsMixin:
             )
             if pw != DEV_MODE_PASSWORD:
                 if pw is not None:  # None = Dialog abgebrochen, keine Meldung nötig
-                    messagebox.showerror("Entwicklermodus", "Falsches Passwort.")
+                    messagebox.showerror("Entwicklermodus", "Falsches Passwort.", parent=self._dialog_parent())
                 return
             self._dev_mode = True
             print("Entwicklermodus aktiviert.")

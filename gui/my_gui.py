@@ -55,6 +55,7 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
         builder.add_resource_path(PROJECT_PATH)
         builder.add_from_file(PROJECT_UI)
         self.mainwindow = builder.get_object('mainwindow', master)
+        self._init_display()
         self._apply_style()
         builder.connect_callbacks(self)
         self._images = {}
@@ -71,10 +72,14 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
 
         # Kachel-Bilder liegen in voller Auflösung (270x420px) vor - verkleinert einsetzen,
         # sonst passt das Hauptfenster auf kleineren Bildschirmen nicht mehr komplett drauf.
-        self.set_image("button_figur1", "Form1r.png", size=(150, 233))
-        self.set_image("button_testen", "platzhalter_neu.png", size=(150, 233))
-        self.set_image("button_tischecken", "platzhalter_neu.png", size=(150, 233))
-        self.set_image("button_platzhalter", "platzhalter_neu.png", size=(150, 233))
+        # Auf flachen Touchscreens stehen die Kacheln nebeneinander und werden so groß wie
+        # die Bildschirmhöhe erlaubt.
+        tile_h = self._apply_compact_layout_main() if self._compact else 233
+        tile_size = (round(tile_h * 270 / 420), tile_h)
+        self.set_image("button_figur1", "Form1r.png", size=tile_size)
+        self.set_image("button_testen", "platzhalter_neu.png", size=tile_size)
+        self.set_image("button_tischecken", "platzhalter_neu.png", size=tile_size)
+        self.set_image("button_platzhalter", "platzhalter_neu.png", size=tile_size)
 
         self._make_responsive(self.mainwindow, self.builder.get_object("frame_main"))
         self._fit_window_to_screen(self.mainwindow)

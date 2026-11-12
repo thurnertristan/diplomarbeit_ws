@@ -253,6 +253,7 @@ class ProgramMixin:
             "dann bestätigen.\n\n"
             "Der neue Tisch-Offset wird sofort gespeichert und auf alle "
             "künftigen Programmläufe angewendet.",
+            parent=self._dialog_parent(),
         ):
             return
 
@@ -261,6 +262,7 @@ class ProgramMixin:
         messagebox.showinfo(
             "Nullpunkt kalibriert",
             f"Neuer Tisch-Offset gespeichert:\ndx = {dx:+.4f} m\ndy = {dy:+.4f} m\ndz = {dz:+.4f} m",
+            parent=self._dialog_parent(),
         )
 
     def _run_figure_program(self, program_path: pathlib.Path) -> None:

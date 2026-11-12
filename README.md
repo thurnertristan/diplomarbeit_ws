@@ -1,10 +1,58 @@
 # diplomarbeit_ws
 Programmierung des Roboters
 
-## Programm start befehl
-source /opt/ros/jazzy/setup.bash
-source gui/venv/bin/activate
-python3 gui/my_gui.py
+## GUI starten
+
+Alle Befehle im Repo-Ordner (`diplomarbeit_ws`) ausführen. `start_gui.sh`
+erledigt alles selbst (ROS sourcen, venv anlegen, fehlende Pakete
+installieren) - kein manuelles `source` nötig.
+
+### Normalbetrieb (10"-Touchscreen, Vollbild)
+
+```bash
+./start_gui.sh
+```
+
+Alle Fenster laufen randlos im Vollbild auf dem Touchscreen. Ist zusätzlich
+ein normaler Monitor angeschlossen, wird automatisch der **kleinste**
+Bildschirm genommen (= der Touchscreen). Einen bestimmten Monitor erzwingen
+(Name laut `xrandr`):
+
+```bash
+FR20_MONITOR=HDMI-1 ./start_gui.sh
+```
+
+### Am Entwickler-Bildschirm (normale Fenster)
+
+```bash
+FR20_KIOSK=0 ./start_gui.sh
+```
+
+Die Fenster öffnen dann als normale, verschiebbare Fenster statt im Vollbild.
+
+### Autostart beim Hochfahren
+
+```bash
+./autostart.sh ein      # GUI startet ab dem nächsten Anmelden automatisch
+./autostart.sh aus      # Autostart wieder abschalten
+./autostart.sh status   # zeigt, ob der Autostart aktiv ist
+```
+
+- Der Autostart greift beim **Anmelden**. Damit die GUI direkt nach dem
+  Hochfahren ohne Passworteingabe erscheint: Ubuntu-Einstellungen →
+  Benutzer → **Automatische Anmeldung** einschalten.
+- Ausgaben der automatisch gestarteten GUI (zur Fehlersuche):
+  `~/.cache/fr20_gui_autostart.log`
+- Technisch ist das der Eintrag `~/.config/autostart/fr20-gui.desktop`.
+
+### Zugriff auf den RS485-Converter
+
+Für die echte Motoransteuerung (`/dev/ttyUSB0`) muss der Benutzer einmalig in
+der Gruppe `dialout` sein, danach ab- und wieder anmelden:
+
+```bash
+sudo usermod -aG dialout $USER
+```
 
 ## Fairino FR20-Simulation und GUI-Steuerung
 

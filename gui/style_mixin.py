@@ -6,7 +6,8 @@ import tkinter as tk
 from tkinter import ttk
 from PIL import Image, ImageTk
 
-from constants import PROJECT_PATH
+from constants import COMPACT_LAYOUT_MAX_HEIGHT, KIOSK_MODE, KIOSK_MONITOR, LOGO_FILE, PROJECT_PATH
+from display import find_target_monitor
 
 
 class StyleMixin:
@@ -152,6 +153,8 @@ class StyleMixin:
             window = getattr(self, attr, None)
             if window is not None:
                 window.configure(background=bg)
+        for label in getattr(self, "_logo_labels", []):
+            label.configure(background=bg)
 
     def _make_responsive(self, window: tk.Toplevel, container: ttk.Frame) -> None:
         """Hält den Inhalt beim Verkleinern/Vergrößern zentriert statt ihn zu verzerren:
@@ -159,17 +162,122 @@ class StyleMixin:
         window.columnconfigure(0, weight=1)
         window.rowconfigure(0, weight=1)
 
+    def _init_display(self) -> None:
+        """Bestimmt einmalig den Ziel-Monitor (10"-Touchscreen) - muss vor dem ersten
+        _fit_window_to_screen() laufen. Siehe display.py und KIOSK_* in constants.py."""
+        self._kiosk = KIOSK_MODE
+        self._monitor = find_target_monitor(
+            KIOSK_MONITOR, self.mainwindow.winfo_screenwidth(), self.mainwindow.winfo_screenheight()
+        )
+        self._compact = self._monitor.height <= COMPACT_LAYOUT_MAX_HEIGHT
+        mode = "Vollbild" if self._kiosk else "Fenster"
+        print(f"Anzeige: {mode} auf Monitor {self._monitor.name} ({self._monitor.geometry})")
+
     def _fit_window_to_screen(self, window: tk.Toplevel, margin: int = 80) -> None:
-        """Verkleinert/zentriert ein Fenster, falls es größer als der Bildschirm ist - sonst
-        könnten Buttons am unteren Rand auf kleinen Bildschirmen unsichtbar werden."""
+        """Kiosk-Modus: Fenster randlos im Vollbild auf den Ziel-Monitor legen (Inhalt bleibt
+        über _make_responsive zentriert). Sonst: Fenster auf dem Ziel-Monitor zentrieren und
+        ggf. verkleinern, damit unten keine Buttons abgeschnitten werden."""
+        mon = self._monitor
+        self._add_logo(window)
         window.update_idletasks()
         req_w, req_h = window.winfo_reqwidth(), window.winfo_reqheight()
-        screen_w, screen_h = window.winfo_screenwidth(), window.winfo_screenheight()
-        w = min(req_w, screen_w - margin)
-        h = min(req_h, screen_h - margin)
-        x = max(0, (screen_w - w) // 2)
-        y = max(0, (screen_h - h) // 2)
+        if req_w > mon.width or req_h > mon.height:
+            print(
+                f"Warnung: Fenster '{window.title()}' braucht {req_w}x{req_h}, Bildschirm hat nur "
+                f"{mon.width}x{mon.height} - Schriftgröße/Zoom in den Optionen verkleinern."
+            )
+        if self._kiosk:
+            window.geometry(mon.geometry)
+            window.attributes("-fullscreen", True)
+            # Manche Fenstermanager platzieren ein wieder eingeblendetes (deiconify) Fenster
+            # neu - beim Einblenden daher erneut auf den Touchscreen + Vollbild zwingen.
+            window.bind("<Map>", lambda e, w=window: self._reassert_fullscreen(w, e), add="+")
+            return
+        w = min(req_w, mon.width - margin)
+        h = min(req_h, mon.height - margin)
+        x = mon.x + max(0, (mon.width - w) // 2)
+        y = mon.y + max(0, (mon.height - h) // 2)
         window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _add_logo(self, window: tk.Toplevel, size: int = 70) -> None:
+        """Blendet das Dry-Expert-Logo unten rechts in der Ecke ein - per place() über dem
+        Fenster, damit das grid-Layout aus der .ui unverändert bleibt. Weißer Hintergrund
+        des Logos wird transparent gemacht, damit es auch im Dark Mode passt."""
+        if getattr(self, "_logo_photo", None) is None:
+            img = Image.open(PROJECT_PATH / LOGO_FILE).convert("RGBA")
+            img.putdata([(r, g, b, 0) if min(r, g, b) > 240 else (r, g, b, a) for r, g, b, a in img.getdata()])
+            self._logo_photo = ImageTk.PhotoImage(img.resize((size, size), Image.LANCZOS))
+            self._logo_labels: list[tk.Label] = []
+        label = tk.Label(window, image=self._logo_photo, borderwidth=0, background=self._palette()["bg"])
+        label.place(relx=1.0, rely=1.0, x=-12, y=-12, anchor="se")
+        self._logo_labels.append(label)
+
+    def _reassert_fullscreen(self, window: tk.Toplevel, event: tk.Event) -> None:
+        if event.widget is not window:  # <Map> feuert auch für jedes Kind-Widget
+            return
+        # Erst prüfen, nachdem der Fenstermanager das Fenster platziert hat: GNOME/mutter legt
+        # ein Fenster, das zum ersten Mal sichtbar wird, auf den Monitor mit dem Mauszeiger
+        # und macht es DORT zum Vollbild - dann zurück auf den Touchscreen holen.
+        window.after(150, lambda: self._move_to_target_monitor(window))
+
+    def _move_to_target_monitor(self, window: tk.Toplevel, tries: int = 5) -> None:
+        mon = self._monitor
+        if not window.winfo_viewable():
+            return
+        if (window.winfo_rootx(), window.winfo_rooty()) == (mon.x, mon.y):
+            return
+        window.attributes("-fullscreen", False)
+        window.update_idletasks()
+        window.geometry(mon.geometry)
+        window.update_idletasks()
+        window.attributes("-fullscreen", True)
+        if tries > 1:
+            window.after(150, lambda: self._move_to_target_monitor(window, tries - 1))
+
+    def _dialog_parent(self) -> tk.Toplevel:
+        """Das gerade oben liegende sichtbare Fenster - als `parent` für messagebox/simpledialog,
+        damit Dialoge auf dem Touchscreen über diesem Fenster erscheinen (ohne parent landen
+        sie mittig auf dem gesamten Desktop, also ggf. auf dem anderen Monitor)."""
+        for attr in (
+            "window_log", "window_manuell", "window_kalibrierung", "window_optionen",
+            "window_programm", "window_biegekopf", "window_testen",
+        ):
+            window = getattr(self, attr, None)
+            if window is not None and window.winfo_viewable():
+                return window
+        return self.mainwindow
+
+    def _apply_compact_layout_main(self) -> int:
+        """Flacher Bildschirm (z.B. 1280x800): die vier Kacheln nebeneinander statt 2x2 - in
+        Python statt in der .ui, da pygubu-Designer die .ui beim Speichern neu schreibt.
+        Gibt die passende Kachel-Bildhöhe zurück."""
+        get = self.builder.get_object
+        get("label_title").grid_configure(columnspan=4)
+        tiles = (
+            ("label_figur1_caption", "button_figur1"),
+            ("label_testen_caption", "button_testen"),
+            ("label_tischecken_caption", "button_tischecken"),
+            ("label_platzhalter_caption", "button_platzhalter"),
+        )
+        for col, (caption, button) in enumerate(tiles):
+            get(caption).grid_configure(row=1, column=col, padx=10)
+            get(button).grid_configure(row=2, column=col, padx=10)
+        get("button_optionen").grid_configure(row=3, column=0, columnspan=2, padx=10, pady=(20, 0))
+        get("button_beenden").grid_configure(row=3, column=2, columnspan=2, padx=10, pady=(20, 0))
+        # Bildgröße aus dem verfügbaren Platz: Höhe minus Titel/Beschriftung/Buttons (~300px),
+        # Breite pro Kachel minus Ränder/Button-Padding (~45px) - Seitenverhältnis 270:420.
+        max_h_by_height = self._monitor.height - 300
+        max_h_by_width = (self._monitor.width - 40) // 4 - 45
+        max_h_by_width = max_h_by_width * 420 // 270
+        return max(150, min(420, max_h_by_height, max_h_by_width))
+
+    def _apply_compact_layout_options(self) -> None:
+        """Optionen zweispaltig: links Navigation, rechts Einstellungen/Entwicklermodus."""
+        get = self.builder.get_object
+        get("label_optionen_title").grid_configure(columnspan=2)
+        get("frame_einstellungen").grid_configure(row=1, column=1, rowspan=3, padx=(20, 0), pady=0)
+        get("frame_entwicklermodus").grid_configure(row=4, column=1, padx=(20, 0))
+        get("button_optionen_schliessen").grid_configure(row=4, column=0, sticky="sew")
 
     def _style_widget(self, widget_id: str, style_name: str | None = None, text: str | None = None) -> None:
         """Setzt Style und/oder Text eines bereits gebauten Widgets."""
