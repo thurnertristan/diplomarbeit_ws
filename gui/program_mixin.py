@@ -30,7 +30,8 @@ class ProgramMixin:
                 self._gz_proc = None
                 self._publishers = None
 
-            print("Starte Gazebo (FR20, transparente Wände) ...")
+            backend_name = "RViz2" if sim.SIM_BACKEND == "rviz" else "Gazebo"
+            print(f"Starte {backend_name} (FR20) ...")
             self._gz_proc, self._publishers = sim.launch_simulation()
 
             # Roboter spawnt in der physikalischen Null-Stellung - erst die kollisionsfreie
@@ -39,7 +40,7 @@ class ProgramMixin:
             with self._pose_lock:
                 self._current_joints = dict(sim.SAFE_STAGING_POSE)
 
-            print("Gazebo bereit.")
+            print(f"{backend_name} bereit.")
             return self._publishers
 
     def _stop_running_program(self, graceful: bool = False) -> bool:

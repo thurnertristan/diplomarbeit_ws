@@ -57,6 +57,10 @@ def import_gz(base: str, submodule: str = ""):
     """Importiert ein gz-Python-(Unter-)Modul unabhängig davon, ob die installierte Gazebo-
     Version es unversioniert (z.B. "gz.transport") oder versioniert ("gz.transport13")
     bereitstellt. `base` z.B. "transport"/"msgs", `submodule` optional z.B. "double_pb2"."""
+    if SIM_BACKEND == "rviz" and (base, submodule) == ("msgs", "double_pb2"):
+        # RViz-Betrieb braucht Gazebo nicht - eigener Ersatz für gz.msgs.Double.
+        import rviz_backend
+        return rviz_backend
     tried = []
     for suffix in _GZ_VERSION_SUFFIXES:
         name = f"gz.{base}{suffix}" + (f".{submodule}" if submodule else "")
@@ -74,6 +78,11 @@ def import_gz(base: str, submodule: str = ""):
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
+
+# Simulations-Backend: "gazebo" (Physik-Simulation, Standard) oder "rviz" (nur 3D-Anzeige
+# in RViz2, deutlich leichter - siehe rviz_backend.py). Umschalten per Umgebungsvariable:
+#   FR20_SIM=rviz ./start_gui.sh
+SIM_BACKEND = os.environ.get("FR20_SIM", "gazebo").strip().lower()
 
 MODEL_NAME = "fr20"
 WORLD_NAME = "ceiling_fr20_world"
@@ -625,7 +634,15 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     die Biegekopf-Testachse - genauso per Double-Nachricht ansteuerbar wie die Armgelenke.
 
     Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation() verwenden.
+
+    Mit FR20_SIM=rviz (SIM_BACKEND) wird stattdessen RViz2 gestartet - gleiche Rückgabe,
+    siehe rviz_backend.launch().
     """
+    if SIM_BACKEND == "rviz":
+        import rviz_backend
+        return rviz_backend.launch(headless=headless)
+    if SIM_BACKEND != "gazebo":
+        raise ValueError(f"Unbekanntes FR20_SIM='{SIM_BACKEND}' - erlaubt: gazebo, rviz")
     for tool in ("gz", "ros2"):
         check_tool(tool)
     isolate_gz_partition()

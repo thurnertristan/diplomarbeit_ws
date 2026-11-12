@@ -646,7 +646,7 @@ def main() -> None:
         ok = dry_run_program(program)
         raise SystemExit(0 if ok else 1)
 
-    print("Starte Gazebo Jetty (gz-sim) ...")
+    print("Starte RViz2 ..." if sim.SIM_BACKEND == "rviz" else "Starte Gazebo Jetty (gz-sim) ...")
     gz_proc, publishers = sim.launch_simulation(headless=args.headless)
 
     try:
@@ -658,7 +658,7 @@ def main() -> None:
         print("\nProgramm fertig. Strg+C hier drücken, um zu beenden.")
         gz_proc.wait()
     except KeyboardInterrupt:
-        print("\nBeende Gazebo ...")
+        print("\nBeende Simulation ...")
     finally:
         sim.shutdown_simulation(gz_proc)
 

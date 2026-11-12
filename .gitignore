@@ -10,6 +10,7 @@ __pycache__/
 # Von gz-sim zur Laufzeit erzeugtes URDF/SDF (siehe fr20_ceiling_gazebo.py)
 /gazebo_fr20_ceiling_generated/*.urdf
 /gazebo_fr20_ceiling_generated/*.sdf
+/gazebo_fr20_ceiling_generated/*.yaml
 
 # Kalibrierter Tisch-Offset (siehe fr20_ceiling_gazebo.py) - physisch an
 # diesen einen Aufbau gebunden, gehört nicht ins Repo.

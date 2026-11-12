@@ -30,6 +30,23 @@ FR20_KIOSK=0 ./start_gui.sh
 
 Die Fenster öffnen dann als normale, verschiebbare Fenster statt im Vollbild.
 
+### Simulation: Gazebo oder RViz2
+
+Standard ist Gazebo (Physik-Simulation). Alternativ RViz2 - nur 3D-Anzeige ohne
+Physik, dafür viel leichter (gut zum Prüfen von Bahnen, Posen und Erreichbarkeit):
+
+```bash
+FR20_SIM=rviz ./start_gui.sh
+FR20_SIM=rviz FR20_KIOSK=0 ./start_gui.sh                         # am Entwickler-Bildschirm
+FR20_SIM=rviz python3 robot_program.py programs/beispiel_tisch.json
+python3 rviz_backend.py                                           # nur RViz2 + Beispielpose
+```
+
+Umgesetzt in `rviz_backend.py` (URDF mit Tisch/Baugruppe/Biegekopf-Testachse,
+`robot_state_publisher`, eigener `/joint_states`-Publisher), RViz-Ansicht in
+`rviz/fr20.rviz`. Die ROS-Kommunikation bleibt auf diesem Rechner
+(`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`).
+
 ### Autostart beim Hochfahren
 
 ```bash
