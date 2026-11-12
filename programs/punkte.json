@@ -1,0 +1,7 @@
+{
+  "Über Tischmitte": { "xyz": [0.3, -0.1, 1.05], "dwell_s": 1.5 },
+  "Vorne rechts": { "xyz": [0.3, -0.2, 1.05], "dwell_s": 1.5 },
+  "Hinten rechts": { "xyz": [0.3, 0.2, 1.05], "dwell_s": 1.5 },
+  "Hinten links": { "xyz": [-0.3, 0.2, 1.05], "dwell_s": 1.5 },
+  "Vorne links": { "xyz": [-0.3, -0.2, 1.05], "dwell_s": 1.5 }
+}

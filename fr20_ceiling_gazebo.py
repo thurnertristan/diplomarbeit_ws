@@ -47,25 +47,16 @@ from pathlib import Path
 
 import bending_head_motor as bhm
 
-# Verschiedene Gazebo-Versionen benennen ihre Python-Bindings unterschiedlich:
-# manche unversioniert (z.B. "gz.transport" bei Gazebo Jetty/gz-sim10 in
-# unseren Tests), andere versioniert (z.B. "gz.transport13" bei Gazebo
-# Harmonic/gz-sim8, damit mehrere Major-Versionen nebeneinander installierbar
-# sind - "gz.transport" existiert dort schlicht nicht). Ein fest verdrahtetes
-# "from gz.transport import Node" funktioniert deshalb nicht auf jedem
-# Rechner. import_gz() probiert beide Varianten durch.
+# Verschiedene Gazebo-Versionen benennen ihre Python-Bindings unterschiedlich (unversioniert
+# "gz.transport" bei Jetty, versioniert "gz.transport13" bei Harmonic, damit mehrere
+# Major-Versionen nebeneinander installierbar sind) - import_gz() probiert beide Varianten durch.
 _GZ_VERSION_SUFFIXES = ("", "10", "11", "12", "13", "14", "15", "16", "17", "18")
 
 
 def import_gz(base: str, submodule: str = ""):
-    """Importiert ein gz-Python-(Unter-)Modul unabhängig davon, ob die
-    installierte Gazebo-Version es unversioniert (z.B. "gz.transport") oder
-    versioniert (z.B. "gz.transport13") bereitstellt.
-
-    `base` ist z.B. "transport" oder "msgs", `submodule` optional z.B.
-    "double_pb2" (für "gz.msgs<N>.double_pb2"). Wirft ModuleNotFoundError
-    mit einer Liste aller versuchten Namen, falls keiner passt.
-    """
+    """Importiert ein gz-Python-(Unter-)Modul unabhängig davon, ob die installierte Gazebo-
+    Version es unversioniert (z.B. "gz.transport") oder versioniert ("gz.transport13")
+    bereitstellt. `base` z.B. "transport"/"msgs", `submodule` optional z.B. "double_pb2"."""
     tried = []
     for suffix in _GZ_VERSION_SUFFIXES:
         name = f"gz.{base}{suffix}" + (f".{submodule}" if submodule else "")
@@ -97,11 +88,9 @@ MOUNT_XY = (0.0, 0.0)       # Position der Deckenhalterung über dem Boden
 TABLE_CENTER = MOUNT_XY     # x, y Position, an der die Baugruppe steht (mittig unter dem Roboter)
 TABLE_TOP_Z = 0.75          # Höhe, auf der die Unterseite der Baugruppe aufliegt
 
-# Anstelle des früheren Tisch-Quaders steht dort jetzt die STL-Baugruppe des
-# Nutzers (Downloads/Baugruppe1.stl, hier vendored). Das Mesh liegt in mm vor
-# (typischer SolidWorks-STL-Export) und ist nicht um seinen Ursprung
-# zentriert - Skalierung sowie Bounding-Box-Werte unten wurden einmalig aus
-# der Datei ausgelesen (siehe ASSEMBLY_BBOX_MM):
+# STL-Baugruppe des Nutzers (Downloads/Baugruppe1.stl, vendored). Mesh liegt in mm vor
+# (SolidWorks-Export) und ist nicht um seinen Ursprung zentriert - Skalierung sowie
+# Bounding-Box-Werte unten wurden einmalig aus der Datei ausgelesen:
 #   min (mm): (-375.21, -857.37, -21.0)   max (mm): (324.79, 847.63, 24.0)
 ASSEMBLY_MESH_PATH = REPO_ROOT / "meshes" / "baugruppe1" / "Baugruppe1.stl"
 ASSEMBLY_MESH_SCALE = 0.001  # mm -> m
@@ -109,11 +98,9 @@ ASSEMBLY_XY_OFFSET_M = (-0.0252107, -0.0048693)  # Bounding-Box-Mitte (x,y) rela
 ASSEMBLY_MIN_Z_M = -0.021                        # tiefster Punkt der Baugruppe relativ zum Mesh-Ursprung
 ASSEMBLY_SIZE_XY_M = (0.7, 1.705)                # Grundfläche der Baugruppe (Bounding Box x/y)
 
-# Die Baugruppe steht nicht frei in der Luft, sondern auf einem Tisch, der
-# etwas größer ist als ihre Grundfläche und von TABLE_TOP_Z bis zum Boden
-# reicht. TABLE_MARGIN_M gilt rundum, an den beiden kurzen Enden (entlang der
-# 1705mm-Längsachse der Baugruppe, y-Richtung) kommt zusätzlich
-# TABLE_END_OVERHANG_M dazu, damit der Tisch dort deutlich länger ist.
+# Die Baugruppe steht auf einem Tisch, etwas größer als ihre Grundfläche, der von TABLE_TOP_Z
+# bis zum Boden reicht. TABLE_MARGIN_M gilt rundum, an den kurzen Enden (y-Richtung) kommt
+# zusätzlich TABLE_END_OVERHANG_M dazu.
 TABLE_MARGIN_M = 0.05
 TABLE_END_OVERHANG_M = 0.15
 TABLE_SIZE_XY = (
@@ -121,35 +108,29 @@ TABLE_SIZE_XY = (
     ASSEMBLY_SIZE_XY_M[1] + 2 * TABLE_MARGIN_M + 2 * TABLE_END_OVERHANG_M,
 )
 
-# Referenzpunkt für die Nullpunkt-Kalibrierung: ein markanter Punkt auf der
-# Baugruppe selbst (ihre Bounding-Box-Mitte), eindeutig wiederzufinden.
-# Liegt fast auf der Mount-Achse des Roboters (IK-Totzone, siehe
-# LOOK_AT_TABLE_POSE), daher derselbe Versatz von 0.3/-0.1 m. Rutscht die
-# Baugruppe, wird die Differenz zur tatsächlich angetasteten Position als
-# TABLE_OFFSET gespeichert und auf alle kartesischen Programmpunkte addiert.
+# Referenzpunkt für die Nullpunkt-Kalibrierung: Bounding-Box-Mitte der Baugruppe, eindeutig
+# wiederzufinden. Liegt fast auf der Mount-Achse des Roboters (IK-Totzone, siehe
+# LOOK_AT_TABLE_POSE), daher derselbe Versatz 0.3/-0.1 m. Rutscht die Baugruppe, wird die
+# Differenz zur tatsächlich angetasteten Position als TABLE_OFFSET gespeichert und auf alle
+# kartesischen Programmpunkte addiert.
 CALIBRATION_REFERENCE_XYZ = (
     TABLE_CENTER[0] - ASSEMBLY_XY_OFFSET_M[0] + 0.3,
     TABLE_CENTER[1] - ASSEMBLY_XY_OFFSET_M[1] - 0.1,
     TABLE_TOP_Z - ASSEMBLY_MIN_Z_M,
 )
 
-# Persistierter Tisch-Offset (dx, dy, dz in m) aus der letzten Kalibrierung -
-# eigene Datei statt Wert im Code, damit er über GUI-Starts hinweg erhalten bleibt.
+# Persistierter Tisch-Offset (dx, dy, dz in m) aus der letzten Kalibrierung - eigene Datei
+# statt Wert im Code, damit er über GUI-Starts hinweg erhalten bleibt.
 TABLE_OFFSET_PATH = REPO_ROOT / "table_offset.json"
 
-# Gelenkreihenfolge, wie sie fairino_description für den FR20 verwendet
-# (base_link -> j1 -> shoulder_link -> j2 -> upperarm_link -> j3 ->
-# forearm_link -> j4 -> wrist1_link -> j5 -> wrist2_link -> j6 -> wrist3_link).
+# Gelenkreihenfolge, wie sie fairino_description für den FR20 verwendet.
 JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
 
-# Pose, in der der Endeffektor (tool0) senkrecht von der Decke auf die
-# Tischmitte herabschaut. Per IK aus fr20_kinematics berechnet.
-#
-# Zielpunkt bewusst NICHT exakt TABLE_CENTER: das liegt genau auf der
-# j1-Rotationsachse - eine kinematische Singularität ohne IK-Lösung, plus
-# eine reale Reichweiten-Totzone von ca. 0.3 m Radius um diese Achse. Der
-# Zielpunkt liegt daher 0.3/-0.1 m neben der Mitte - visuell weiterhin "an
-# der Tischmitte", aber IK-lösbar.
+# Pose, in der der Endeffektor (tool0) senkrecht von der Decke auf die Tischmitte herabschaut
+# (per IK aus fr20_kinematics berechnet). Zielpunkt bewusst NICHT exakt TABLE_CENTER: das
+# liegt genau auf der j1-Rotationsachse - eine kinematische Singularität ohne IK-Lösung, plus
+# eine reale Reichweiten-Totzone von ca. 0.3 m Radius um diese Achse. Der Zielpunkt liegt
+# daher 0.3/-0.1 m neben der Mitte - visuell weiterhin "an der Tischmitte", aber IK-lösbar.
 LOOK_AT_TABLE_POSE = {
     "j1": 0.87427,
     "j2": -0.95155,
@@ -159,12 +140,11 @@ LOOK_AT_TABLE_POSE = {
     "j6": -2.44506,
 }
 
-# gz-sim spawnt den Roboter physikalisch immer in der URDF-Null-Stellung
-# (alle Gelenke 0), unabhängig von der im Python-Code angenommenen "aktuellen"
-# Pose. Ein direkter Sprung von dort zu LOOK_AT_TABLE_POSE lässt Unterarm/
-# Handgelenk mitten durch den Tisch schwingen. SAFE_STAGING_POSE ist eine
-# Zwischenpose, für die sowohl "Null -> hier" als auch "hier ->
-# LOOK_AT_TABLE_POSE" kollisionsfrei sind - jeder Ablauf fährt sie zuerst an.
+# gz-sim spawnt den Roboter physikalisch immer in der URDF-Null-Stellung, unabhängig von der
+# im Python-Code angenommenen "aktuellen" Pose. Ein direkter Sprung von dort zu
+# LOOK_AT_TABLE_POSE lässt Unterarm/Handgelenk mitten durch den Tisch schwingen.
+# SAFE_STAGING_POSE ist eine Zwischenpose, für die sowohl "Null -> hier" als auch
+# "hier -> LOOK_AT_TABLE_POSE" kollisionsfrei sind - jeder Ablauf fährt sie zuerst an.
 SAFE_STAGING_POSE = {
     "j1": 0.87400,
     "j2": 0.00000,
@@ -174,20 +154,16 @@ SAFE_STAGING_POSE = {
     "j6": -2.44500,
 }
 
-# Höhe, auf die robot_program.py beim Wechsel zwischen zwei kartesischen
-# Punkten zurückzieht, bevor seitlich verfahren wird - zwei sichere Punkte
-# können unterschiedliche Ellbogen-Konfigurationen brauchen, die reine
-# Gelenkraum-Interpolation zwischen ihnen schwingt dann oft durch den Tisch.
-# Deutlich über TABLE_TOP_Z, damit auch bei einem Ellbogen-Wechsel genug
-# Abstand bleibt.
+# Höhe, auf die robot_program.py beim Wechsel zwischen zwei kartesischen Punkten
+# zurückzieht, bevor seitlich verfahren wird - zwei sichere Punkte können unterschiedliche
+# Ellbogen-Konfigurationen brauchen, reine Gelenkraum-Interpolation zwischen ihnen schwingt
+# dann oft durch den Tisch. Deutlich über TABLE_TOP_Z für Abstand auch bei Ellbogen-Wechsel.
 SAFE_TRAVEL_Z = 1.4
 
-# PID-Gains für die gz-sim JointPositionController-Plugins. Die schulternahen
-# Gelenke tragen mehr Last (Eigengewicht des hängenden Arms, 20kg Traglast)
-# und brauchen daher höhere Gains, damit die Pose stabil gehalten wird.
-# d_gain ist bewusst hoch angesetzt, da run_program() den Zielwinkel als
-# Sprung vorgibt statt ihn sanft anzunähern - mehr Dämpfung bremst das
-# Überschwingen, auf Kosten einer etwas trägeren Annäherung.
+# PID-Gains für die gz-sim JointPositionController-Plugins. Schulternahe Gelenke tragen mehr
+# Last (Eigengewicht des hängenden Arms, 20kg Traglast) und brauchen höhere Gains. d_gain ist
+# bewusst hoch, da run_program() den Zielwinkel als Sprung vorgibt statt sanft anzunähern -
+# mehr Dämpfung bremst das Überschwingen, auf Kosten einer etwas trägeren Annäherung.
 JOINT_GAINS = {
     "j1": (6000, 0, 950),
     "j2": (12000, 0, 2200),
@@ -197,11 +173,9 @@ JOINT_GAINS = {
     "j6": (400, 0, 50),
 }
 
-# Geschwindigkeitsgrenzen der Gelenke (rad/s), wie in
-# fairino_description/urdf/fairino20_v6.urdf hinterlegt. robot_program.py
-# nutzt das, um vor jedem Punkt genug Wartezeit einzuplanen (siehe
-# _min_settle_time dort), damit ein Gelenk bei großen Sprüngen die Strecke
-# zurücklegen und abbremsen kann, statt über den Zielwinkel zu schießen.
+# Geschwindigkeitsgrenzen der Gelenke (rad/s) aus fairino_description/urdf/fairino20_v6.urdf -
+# robot_program.py plant damit vor jedem Punkt genug Wartezeit ein (siehe _min_settle_time),
+# damit ein Gelenk bei großen Sprüngen abbremsen kann, statt über den Zielwinkel zu schießen.
 JOINT_VELOCITY_LIMIT_RAD_S = {
     "j1": 3.15,
     "j2": 3.15,
@@ -211,44 +185,31 @@ JOINT_VELOCITY_LIMIT_RAD_S = {
     "j6": 3.2,
 }
 
-# Biegekopf-Testachse (siehe bending_head_motor.py/GazeboBendingBackend):
-# Bewusst ein einfacher Platzhalter (Ständer + drehbare Welle) statt eines
-# Nachbaus des realen Biegekopfs - es geht hier nur um die Kinematik/den
-# Zeitablauf der Achse im Zusammenspiel mit dem FR20-Arm (siehe
-# build_bending_head_model_sdf), solange die Modbus-Register des realen
-# MCDLN35SG-Servos noch nicht final sind, nicht um eine mechanische
-# Nachbildung des Biegekopfs.
+# Biegekopf-Testachse (siehe bending_head_motor.py/GazeboBendingBackend): bewusst ein
+# einfacher Platzhalter (Ständer + drehbare Welle) statt eines Nachbaus des realen
+# Biegekopfs - es geht nur um Kinematik/Zeitablauf im Zusammenspiel mit dem FR20-Arm, solange
+# die Modbus-Register des realen MCDLN35SG-Servos noch nicht final sind.
 BENDING_HEAD_MODEL_NAME = "bending_head_axis"
 BENDING_HEAD_JOINT_NAME = "bend"
 
-# effort = das reale Drehmoment-Limit aus bending_head_motor.py (siehe dort
-# für die Herleitung/Warnung zur minimalen Sicherheitsmarge) - rein
-# informativ als Gelenkgrenze in der Simulation, KEIN Ersatz für das echte
-# Drehmoment-Limit am Verstärker. velocity ein Platzhalter, bis ein
-# konkretes Getriebe/Motorprofil feststeht.
+# effort = reales Drehmoment-Limit aus bending_head_motor.py - rein informativ als
+# Gelenkgrenze in der Simulation, KEIN Ersatz für das echte Limit am Verstärker. velocity ein
+# Platzhalter, bis ein konkretes Getriebe/Motorprofil feststeht.
 BENDING_HEAD_EFFORT_NM = bhm.TORQUE_LIMIT_NM
 BENDING_HEAD_VELOCITY_RAD_S = 1.0
 
-# Angenommene Trägheit der Welle um ihre eigene (Y-)Achse - deutlich höher
-# als eine dünne Platzhalter-Welle physisch hätte: bei zu kleiner Trägheit
-# treibt der Regler das Gelenk in eine aufschaukelnde Schwingung statt einer
-# sauberen Annäherung. 0.05 kg*m^2 entspricht ungefähr einem realen
-# Spannfutter+Welle+Getriebe und hält den Regler im linearen, gedämpften Bereich.
+# Angenommene Trägheit der Welle um ihre eigene (Y-)Achse - deutlich höher als eine dünne
+# Platzhalter-Welle physisch hätte: bei zu kleiner Trägheit schaukelt sich der Regler auf
+# statt sauber anzunähern. 0.05 kg*m^2 entspricht ungefähr Spannfutter+Welle+Getriebe.
 BENDING_HEAD_INERTIA_YY_KGM2 = 0.05
 BENDING_HEAD_GAINS = (1.8, 0, 0.6)  # p, i, d - kritisch gedämpft für BENDING_HEAD_INERTIA_YY_KGM2
 
-# Länge der Platzhalter-Welle (siehe build_bending_head_model_sdf) - eigene
-# Konstante, damit die Positionierung unten die Welle nachweislich mit
-# Abstand am Tisch vorbeiführt statt sie hineinzubauen (siehe
-# BENDING_HEAD_XY/Z-Kommentar).
 BENDING_HEAD_SHAFT_LENGTH_M = 0.4
 
-# Position der Achse: neben dem Tisch, am Ende der Baugruppe entlang ihrer
-# langen Achse (Y-Richtung), dort wo der Biegekopf ansetzen würde. Der
-# Y-Abstand zur Tischkante ist bewusst größer als BENDING_HEAD_SHAFT_LENGTH_M,
-# damit die Welle nicht ins Kollisionsvolumen des Tisches hineinragt (sonst
-# erzeugt die Physik-Engine Kontaktkräfte, die das Gelenk unkontrolliert
-# durchdrehen lassen). Z liegt aus demselben Grund etwas über TABLE_TOP_Z.
+# Position der Achse: neben dem Tisch, am Ende der Baugruppe entlang ihrer langen Achse
+# (Y-Richtung). Y-Abstand zur Tischkante bewusst größer als BENDING_HEAD_SHAFT_LENGTH_M,
+# damit die Welle nicht ins Kollisionsvolumen des Tisches ragt (sonst erzeugt die
+# Physik-Engine Kontaktkräfte, die das Gelenk unkontrolliert durchdrehen lassen).
 BENDING_HEAD_XY = (
     TABLE_CENTER[0],
     TABLE_CENTER[1] - TABLE_SIZE_XY[1] / 2 - BENDING_HEAD_SHAFT_LENGTH_M - 0.1,
@@ -263,27 +224,16 @@ WORK_DIR = Path(__file__).resolve().parent / "gazebo_fr20_ceiling_generated"
 # ---------------------------------------------------------------------------
 
 def isolate_gz_partition() -> None:
-    """Isoliert diesen Lauf in einer eigenen gz-transport-Partition.
-
-    gz-transport findet Prozesse standardmäßig per Multicast über die ganze
-    Maschine hinweg - läuft noch ein alter 'gz sim'-Prozess mit gleichem
-    Weltnamen, kann ein Spawn-Aufruf bei DIESEM landen statt beim gerade
-    gestarteten. GZ_PARTITION kapselt Server, GUI und CLI-Aufrufe dieses
-    einen Laufs in ihr eigenes Netz. Muss VOR dem Start von gz-sim gesetzt sein.
-    """
+    """Isoliert diesen Lauf in einer eigenen gz-transport-Partition - gz-transport findet
+    Prozesse sonst per Multicast über die ganze Maschine, ein Spawn-Aufruf könnte bei einem
+    alten 'gz sim'-Prozess mit gleichem Weltnamen landen. Muss VOR gz-sim-Start gesetzt sein."""
     os.environ["GZ_PARTITION"] = f"fr20_ceiling_{os.getpid()}"
 
 
 def gazebo_env_with_fr20_meshes() -> dict:
-    """Ergänzt GZ_SIM_RESOURCE_PATH um den Ordner, der 'fairino_description' enthält.
-
-    Beim Einlesen des URDF wandelt SDFormat 'package://fairino_description/...'
-    Mesh-URIs in 'model://fairino_description/...' um. gz-sim sucht solche
-    model://-URIs nur in Verzeichnissen, die in GZ_SIM_RESOURCE_PATH stehen -
-    fairino_description ist hier kein installiertes ROS-Paket, sondern liegt
-    direkt im Workspace, daher muss dessen *übergeordneter* Ordner (also
-    dieses Repo) dort eingetragen werden, sonst bleiben Meshes leer.
-    """
+    """Ergänzt GZ_SIM_RESOURCE_PATH um den Ordner, der 'fairino_description' enthält - gz-sim
+    sucht 'model://'-URIs (aus 'package://' beim URDF-Einlesen umgewandelt) nur dort;
+    fairino_description ist kein installiertes ROS-Paket, sondern liegt im Workspace."""
     resource_root = str(REPO_ROOT)
 
     env = os.environ.copy()
@@ -297,7 +247,7 @@ def gazebo_env_with_fr20_meshes() -> dict:
 
 
 def check_tool(name: str) -> None:
-    # Prüft, ob ein Kommandozeilentool (z.B. "gz") installiert ist
+    """Prüft, ob ein Kommandozeilentool (z.B. "gz") installiert ist."""
     if shutil.which(name) is None:
         sys.exit(
             f"Fehler: '{name}' wurde nicht gefunden. Bitte ROS 2 sourcen "
@@ -307,9 +257,8 @@ def check_tool(name: str) -> None:
 
 
 def load_table_offset() -> tuple[float, float, float]:
-    """Lädt den zuletzt kalibrierten Tisch-Offset (dx, dy, dz in m, siehe
-    CALIBRATION_REFERENCE_XYZ/save_table_offset). Ohne vorherige
-    Kalibrierung (Datei fehlt): (0, 0, 0), also keine Korrektur."""
+    """Lädt den zuletzt kalibrierten Tisch-Offset (dx, dy, dz in m). Ohne vorherige
+    Kalibrierung (Datei fehlt): (0, 0, 0)."""
     if not TABLE_OFFSET_PATH.exists():
         return (0.0, 0.0, 0.0)
     data = json.loads(TABLE_OFFSET_PATH.read_text())
@@ -322,24 +271,19 @@ def save_table_offset(dx: float, dy: float, dz: float) -> None:
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    # Führt einen Befehl aus und gibt ihn vorher zur Nachvollziehbarkeit aus
+    """Führt einen Befehl aus und gibt ihn vorher zur Nachvollziehbarkeit aus."""
     print(f"$ {' '.join(cmd)}")
     return subprocess.run(cmd, check=True, **kwargs)
 
 
 def write_mount_urdf(path: Path) -> None:
-    """Hängt den FR20 kopfüber an die Decke.
-
-    Das Original-URDF aus fairino_description kennt weder einen 'world'-
-    Verankerungslink (wie ur_description ihn per Xacro-Makro anbietet) noch
-    ein 'tool0'-Werkzeugframe. Beides wird hier direkt ins geparste XML
-    eingefügt:
-      - 'world' -> 'base_link': fixes Gelenk, per rpy="pi 0 0" um 180° um
-        die X-Achse gekippt (Arm hängt nach unten statt nach oben zu
-        stehen), xyz setzt die Deckenposition.
-      - 'wrist3_link' -> 'tool0': fixes Gelenk mit Identitäts-Transformation,
-        damit fr20_kinematics.py (analog zur UR-Kette) eine 'tool0'-Endpose
-        berechnen kann.
+    """Hängt den FR20 kopfüber an die Decke. Das Original-URDF kennt weder einen
+    'world'-Verankerungslink noch ein 'tool0'-Werkzeugframe - beides wird hier ins geparste
+    XML eingefügt:
+      - 'world' -> 'base_link': fixes Gelenk, per rpy="pi 0 0" um 180° um die X-Achse gekippt
+        (Arm hängt nach unten statt zu stehen), xyz setzt die Deckenposition.
+      - 'wrist3_link' -> 'tool0': fixes Gelenk mit Identitäts-Transformation, damit
+        fr20_kinematics.py eine 'tool0'-Endpose berechnen kann.
     """
     tree = ET.parse(FR20_SOURCE_URDF)
     robot = tree.getroot()
@@ -365,12 +309,8 @@ def write_mount_urdf(path: Path) -> None:
 
 
 def append_joint_position_controllers(urdf_path: Path) -> None:
-    """Hängt pro Gelenk ein gz-sim JointPositionController-Plugin an.
-
-    Damit lassen sich die 6 Armgelenke einzeln über gz-transport-Topics
-    ansteuern, ganz ohne ros2_control/Controller-Manager - für eine feste
-    Zielpose reicht das völlig aus.
-    """
+    """Hängt pro Gelenk ein gz-sim JointPositionController-Plugin an - so lassen sich die 6
+    Armgelenke einzeln über gz-transport-Topics ansteuern, ganz ohne ros2_control."""
     plugins = ['  <gazebo>']
     for joint in JOINT_NAMES:
         p, i, d = JOINT_GAINS[joint]
@@ -390,13 +330,10 @@ def append_joint_position_controllers(urdf_path: Path) -> None:
 
 
 def urdf_to_sdf_model(urdf_path: Path) -> str:
-    """Wandelt das URDF vorab in ein SDF <model>-Element um.
-
-    Der Roboter wird NICHT erst nach dem gz-sim-Start per 'ros_gz_sim
-    create'-Service nachträglich gespawnt (das Modell existierte dabei zwar
-    physikalisch, wurde aber nie in der GUI-Szene angezeigt) - ist er von
-    Anfang an Teil der world.sdf, rendert er zuverlässig.
-    """
+    """Wandelt das URDF vorab in ein SDF <model>-Element um - der Roboter wird NICHT erst
+    nach dem gz-sim-Start per 'ros_gz_sim create' nachträglich gespawnt (das Modell existierte
+    dabei physikalisch, wurde aber nie in der GUI-Szene angezeigt); von Anfang an Teil der
+    world.sdf, rendert er zuverlässig."""
     env = gazebo_env_with_fr20_meshes()
     result = run(["gz", "sdf", "-p", str(urdf_path)], capture_output=True, text=True, env=env)
     sdf_text = result.stdout
@@ -406,20 +343,17 @@ def urdf_to_sdf_model(urdf_path: Path) -> str:
 
 
 def build_bending_head_model_sdf() -> str:
-    """SDF-Modell für die Biegekopf-Testachse (siehe BENDING_HEAD_*-Konstanten
-    und bending_head_motor.GazeboBendingBackend): ein Ständer (fix mit der
-    Welt verbunden) und eine drehbare Welle, mit JointPositionController-
-    Plugin wie bei den FR20-Armgelenken - ansteuerbar über
-    /{BENDING_HEAD_MODEL_NAME}/{BENDING_HEAD_JOINT_NAME}/cmd_pos.
+    """SDF-Modell für die Biegekopf-Testachse (siehe BENDING_HEAD_*-Konstanten und
+    bending_head_motor.GazeboBendingBackend): Ständer (fix mit der Welt verbunden) und eine
+    drehbare Welle, mit JointPositionController-Plugin wie bei den FR20-Armgelenken -
+    ansteuerbar über /{BENDING_HEAD_MODEL_NAME}/{BENDING_HEAD_JOINT_NAME}/cmd_pos.
 
-    Bewusst ein Platzhalter (kein Nachbau des realen Biegekopfs); sobald
-    Mechanik und Motor final feststehen, Geometrie und
-    BENDING_HEAD_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
+    Bewusst ein Platzhalter (kein Nachbau des realen Biegekopfs); sobald Mechanik und Motor
+    feststehen, Geometrie und BENDING_HEAD_EFFORT_NM/VELOCITY/GAINS entsprechend ersetzen.
 
-    Die Welle rotiert um die Y-Achse - Link-Posen bleiben unrotiert, nur die
-    Visual-/Kollisionsgeometrie der Welle wird für die Darstellung um 90°
-    gekippt, damit Gelenk-Achsvektor und Trägheitsmoment im selben,
-    unrotierten Bezugsrahmen bleiben.
+    Die Welle rotiert um die Y-Achse - Link-Posen bleiben unrotiert, nur die Visual-/
+    Kollisionsgeometrie der Welle wird für die Darstellung um 90° gekippt, damit
+    Gelenk-Achsvektor und Trägheitsmoment im selben, unrotierten Bezugsrahmen bleiben.
     """
     stand_height = BENDING_HEAD_Z
     shaft_length = BENDING_HEAD_SHAFT_LENGTH_M
@@ -427,16 +361,13 @@ def build_bending_head_model_sdf() -> str:
     shaft_mass = 5.0  # siehe BENDING_HEAD_INERTIA_YY_KGM2 für die Begründung
     p, i, d = BENDING_HEAD_GAINS
 
-    # Ein reiner Zylinder ist um seine eigene Längsachse rotationssymmetrisch -
-    # dreht er sich genau um diese Achse, sieht man von außen keine Bewegung.
-    # Deshalb eine zusätzliche, radial herausragende "Fahne" fix an der Welle
-    # (eigenes <visual>/<collision> im selben shaft-Link, bewegt sich also
-    # automatisch mit) - asymmetrisch radial UND entlang der Wellenlänge
-    # (näher am äußeren Ende statt mittig, damit sie bei keiner Drehstellung
-    # mit dem Ständer kollidiert).
+    # Ein reiner Zylinder ist um seine Längsachse rotationssymmetrisch - eine Drehung wäre
+    # von außen unsichtbar. Deshalb eine radial herausragende "Fahne" fix an der Welle
+    # (eigenes visual/collision im shaft-Link), asymmetrisch platziert, damit sie bei keiner
+    # Drehstellung mit dem Ständer kollidiert.
     marker_length = shaft_length * 0.5
     marker_width = 0.04
-    marker_protrusion = 0.08  # radialer Überstand über die Wellenoberfläche hinaus
+    marker_protrusion = 0.08
     marker_x_offset = shaft_radius + marker_protrusion / 2
     marker_y_offset = shaft_length / 2 - marker_length / 2 - 0.02
 
@@ -510,12 +441,9 @@ def build_world_sdf(robot_model_sdf: str) -> str:
     wall_h = CEILING_Z
     wall_t = 0.05
 
-    # Wände und Decke werden transparent dargestellt (niedrige Alpha +
-    # <transparency>, Ogre2 braucht beides), damit der an der Decke hängende
-    # Roboter aus jedem Kamerawinkel sichtbar bleibt, statt von einer Wand
-    # oder der Decke selbst verdeckt zu werden. Die Kollisionsgeometrie
-    # bleibt jeweils unverändert (weiterhin real vorhanden, nur nicht mehr
-    # blickdicht).
+    # Wände und Decke sind transparent (niedrige Alpha + <transparency>, Ogre2 braucht beides),
+    # damit der an der Decke hängende Roboter aus jedem Kamerawinkel sichtbar bleibt.
+    # Kollisionsgeometrie bleibt unverändert vorhanden, nur nicht mehr blickdicht.
     WALL_ALPHA = 0.15
     CEILING_ALPHA = 0.15
 
@@ -537,20 +465,16 @@ def build_world_sdf(robot_model_sdf: str) -> str:
       </link>
     </model>"""
 
-    # 'wall_west' (-X-Seite) bleibt bewusst weg: gz-sim's Standard-Kamera
-    # startet bei (-6, 0, 6) und blickt entlang +X auf den Ursprung - mit
-    # einer geschlossenen Box würde sie nur die Außenseite dieser einen Wand
-    # sehen, offen auf dieser Seite blickt man von Anfang an hinein.
+    # 'wall_west' (-X-Seite) fehlt bewusst: gz-sim's Standard-Kamera startet bei (-6,0,6) und
+    # blickt entlang +X auf den Ursprung - offen auf dieser Seite blickt man von Anfang an hinein.
     walls = "".join([
         wall("wall_north", f"0 {half} {wall_h / 2} 0 0 0", f"{ROOM_SIZE_XY} {wall_t} {wall_h}"),
         wall("wall_south", f"0 {-half} {wall_h / 2} 0 0 0", f"{ROOM_SIZE_XY} {wall_t} {wall_h}"),
         wall("wall_east", f"{half} 0 {wall_h / 2} 0 0 0", f"{wall_t} {ROOM_SIZE_XY} {wall_h}"),
     ])
 
-    # Baugruppe: STL-Mesh, siehe ASSEMBLY_*-Konstanten oben für Herkunft der
-    # Bounding-Box-Werte. Steht auf einem Tisch (Quader, TABLE_SIZE_XY), der
-    # etwas größer als ihre Grundfläche ist und von TABLE_TOP_Z bis zum Boden
-    # reicht - die Baugruppe schwebt also nicht mehr frei in der Luft.
+    # Baugruppe (STL-Mesh, siehe ASSEMBLY_*-Konstanten) steht auf einem Tisch, der etwas
+    # größer als ihre Grundfläche ist und von TABLE_TOP_Z bis zum Boden reicht.
     assembly_x = TABLE_CENTER[0] - ASSEMBLY_XY_OFFSET_M[0]
     assembly_y = TABLE_CENTER[1] - ASSEMBLY_XY_OFFSET_M[1]
     assembly_z = TABLE_TOP_Z - ASSEMBLY_MIN_Z_M
@@ -642,14 +566,9 @@ def build_world_sdf(robot_model_sdf: str) -> str:
 
 
 def wait_for_world(world_name: str, timeout: float = 60.0) -> None:
-    """Wartet, bis gz-sim die Welt (inkl. des darin enthaltenen Roboters) geladen hat.
-
-    Wirft TimeoutError statt sys.exit() zu rufen: sys.exit() erzeugt ein
-    SystemExit, das von "except Exception" in Hintergrund-Threads (z.B.
-    gui/my_gui.py) nicht gefangen wird und dort zu einem inkonsistenten
-    Zustand führen würde. Timeout bewusst hoch (60s), da langsamere Rechner
-    beim ersten Laden von Meshes/Welt länger brauchen können.
-    """
+    """Wartet, bis gz-sim die Welt geladen hat. Wirft TimeoutError statt sys.exit(), da
+    SystemExit von "except Exception" in Hintergrund-Threads (z.B. gui/my_gui.py) nicht
+    gefangen würde. Timeout bewusst hoch (60s) für langsamere Rechner beim ersten Laden."""
     deadline = time.time() + timeout
     service = f"/world/{world_name}/control"
     while time.time() < deadline:
@@ -661,13 +580,9 @@ def wait_for_world(world_name: str, timeout: float = 60.0) -> None:
 
 
 def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:
-    """Fährt den Arm über gz-transport in eine feste Gelenkpose.
-
-    Ohne `publishers` wird ein einmaliger eigener gz-transport-Node
-    aufgebaut (Standalone-Aufruf, z.B. aus main()). Mit `publishers`
-    (wie sie launch_simulation()/robot_program.py aufbauen) werden die
-    übergebenen Publisher wiederverwendet.
-    """
+    """Fährt den Arm über gz-transport in eine feste Gelenkpose. Ohne `publishers` wird ein
+    einmaliger eigener gz-transport-Node aufgebaut (Standalone-Aufruf); mit `publishers`
+    (wie launch_simulation()/robot_program.py sie aufbauen) werden diese wiederverwendet."""
     Double = import_gz("msgs", "double_pb2").Double
 
     if publishers is None:
@@ -676,8 +591,8 @@ def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:
         node = Node()
         publishers = {j: node.advertise(f"/{MODEL_NAME}/{j}/cmd_pos", Double) for j in JOINT_NAMES}
 
-    # Ein paar Wiederholungen, damit keine der ersten Nachrichten durch die
-    # noch nicht vollständig aufgebaute Discovery verloren geht.
+    # Wiederholt senden, damit keine Nachricht durch die noch nicht vollständig
+    # aufgebaute Discovery verloren geht.
     for _ in range(5):
         for joint, angle in pose.items():
             msg = Double()
@@ -687,42 +602,30 @@ def send_joint_pose(pose: dict, publishers: dict | None = None) -> None:
 
 
 def send_to_safe_staging_pose(publishers: dict | None = None) -> None:
-    """Fährt den Arm aus der (physikalischen) Null-Stellung sicher an
-    SAFE_STAGING_POSE heran - MUSS als erste Bewegung nach dem gz-sim-Start
-    passieren, bevor irgendein Zielpunkt/Programm gesendet wird (siehe
-    Kommentar bei SAFE_STAGING_POSE: Null -> LOOK_AT_TABLE_POSE direkt
-    kollidiert mit dem Tisch)."""
+    """Fährt den Arm aus der physikalischen Null-Stellung sicher an SAFE_STAGING_POSE heran -
+    MUSS als erste Bewegung nach dem gz-sim-Start passieren (siehe Kommentar bei
+    SAFE_STAGING_POSE: Null -> LOOK_AT_TABLE_POSE direkt kollidiert mit dem Tisch)."""
     send_joint_pose(SAFE_STAGING_POSE, publishers)
-    time.sleep(1.0)  # Zeit, die Pose tatsächlich zu erreichen, bevor es weitergeht
+    time.sleep(1.0)  # Zeit, die Pose tatsächlich zu erreichen
 
 
 def send_look_at_table_pose(publishers: dict | None = None) -> None:
-    """Fährt den Arm über gz-transport in die Blick-auf-Tisch-Pose.
-
-    Setzt voraus, dass der Arm bereits bei SAFE_STAGING_POSE steht (siehe
-    send_to_safe_staging_pose) - ein direkter Sprung aus der Null-Stellung
-    würde mit dem Tisch kollidieren.
-    """
+    """Fährt den Arm in die Blick-auf-Tisch-Pose. Setzt voraus, dass der Arm bereits bei
+    SAFE_STAGING_POSE steht - ein direkter Sprung aus der Null-Stellung würde kollidieren."""
     send_joint_pose(LOOK_AT_TABLE_POSE, publishers)
 
 
 def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
-    """Baut URDF/SDF/Welt, startet gz-sim und die gz-transport-Publisher pro
-    Gelenk - der komplette Ablauf, der identisch in main() hier, in
-    robot_program.py und in gui/my_gui.py gebraucht wird. Sendet bewusst
-    noch KEINE Pose (der Roboter steht danach in der physikalischen
-    Null-Stellung) - Aufrufer entscheiden selbst, ob/wann sie z.B.
-    send_to_safe_staging_pose() hinterherschicken.
+    """Baut URDF/SDF/Welt, startet gz-sim und die gz-transport-Publisher pro Gelenk - der
+    komplette Ablauf, den main() hier, robot_program.py und gui/my_gui.py brauchen. Sendet
+    bewusst noch KEINE Pose (Roboter steht in der physikalischen Null-Stellung) - Aufrufer
+    entscheiden selbst, ob/wann sie z.B. send_to_safe_staging_pose() hinterherschicken.
 
-    `publishers` enthält einen Eintrag pro FR20-Armgelenk (j1..j6) sowie
-    einen Eintrag "bending_head" für die Biegekopf-Testachse (siehe
-    build_bending_head_model_sdf/bending_head_motor.GazeboBendingBackend) -
-    vom Aufrufer genauso per Double-Nachricht ansteuerbar wie die Armgelenke.
+    `publishers` enthält einen Eintrag pro FR20-Armgelenk (j1..j6) sowie "bending_head" für
+    die Biegekopf-Testachse - genauso per Double-Nachricht ansteuerbar wie die Armgelenke.
 
-    Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation()
-    verwenden.
+    Gibt (gz_proc, publishers) zurück; zum Beenden shutdown_simulation() verwenden.
     """
-    # Voraussetzungen prüfen und eigene gz-Partition einrichten
     for tool in ("gz", "ros2"):
         check_tool(tool)
     isolate_gz_partition()
@@ -731,13 +634,11 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     urdf_path = WORK_DIR / f"{MODEL_NAME}.urdf"
     world_path = WORK_DIR / "world.sdf"
 
-    # URDF (Roboter) und SDF-Welt (Raum, Tisch, Testachse, Roboter) erzeugen
     write_mount_urdf(urdf_path)
     append_joint_position_controllers(urdf_path)
     robot_model_sdf = urdf_to_sdf_model(urdf_path)
     world_path.write_text(build_world_sdf(robot_model_sdf))
 
-    # Gazebo starten, optional ohne Fenster (-s = headless)
     gz_cmd = ["gz", "sim", "-r", str(world_path)]
     if headless:
         gz_cmd.insert(2, "-s")
@@ -746,7 +647,6 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
     wait_for_world(WORLD_NAME)
     time.sleep(2.0)  # bis die Gelenk-Controller aktiv sind
 
-    # Publisher pro Gelenk anlegen (plus einen für die Biegekopf-Testachse)
     Node = import_gz("transport").Node
     Double = import_gz("msgs", "double_pb2").Double
     node = Node()
@@ -758,8 +658,8 @@ def launch_simulation(headless: bool = False) -> tuple[subprocess.Popen, dict]:
 
 
 def shutdown_simulation(gz_proc: subprocess.Popen) -> None:
-    """Beendet einen mit launch_simulation() gestarteten gz-sim-Prozess sauber."""
-    # erst freundlich beenden, nach 10s notfalls erzwingen
+    """Beendet einen mit launch_simulation() gestarteten gz-sim-Prozess sauber - erst
+    freundlich, nach 10s notfalls erzwungen."""
     if gz_proc.poll() is None:
         gz_proc.terminate()
         try:
@@ -773,7 +673,6 @@ def shutdown_simulation(gz_proc: subprocess.Popen) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    # --headless als einzige Option einlesen
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="gz-sim ohne GUI starten")
     args = parser.parse_args()

@@ -10,9 +10,9 @@ die ein von Hand erstelltes DH-Modell leicht übersieht.
 
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET   # URDF-XML einlesen
+import xml.etree.ElementTree as ET
 
-import numpy as np                   # Vektor-/Matrizenrechnung
+import numpy as np
 
 import fr20_ceiling_gazebo as sim
 

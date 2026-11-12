@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Startet die FR20-Steuerungs-GUI (gui/my_gui.py) mit EINEM Befehl, egal ob
-# schon ein venv existiert, ob es aktiviert ist, oder ob pygubu/Pillow/numpy
-# schon installiert sind:
+# schon ein venv existiert, ob es aktiviert ist, oder ob pygubu/Pillow/numpy/
+# pymodbus schon installiert sind:
 #   - sourced ROS 2 (für Gazebo/gz-transport), falls vorhanden
 #   - legt gui/venv an, falls es fehlt (inkl. Zugriff auf System-Pakete für
 #     die gz-Bindings, siehe gui/venv/pyvenv.cfg)
-#   - installiert fehlende Python-Pakete (pygubu, Pillow, numpy) automatisch
-#     nach - dafür ist beim allerersten Start Internetzugang nötig
+#   - installiert fehlende Python-Pakete (pygubu, Pillow, numpy, pymodbus -
+#     letzteres für die reale Modbus-RTU-Ansteuerung des Biegekopf-Motors,
+#     siehe bending_head_motor.py) automatisch nach - dafür ist beim
+#     allerersten Start Internetzugang nötig
 #   - startet die GUI mit dem venv-Python, ganz ohne manuelles "source
 #     gui/venv/bin/activate"
 #
@@ -82,13 +84,13 @@ if ! "$VENV_PY" -m pip --version >/dev/null 2>&1; then
 fi
 
 MISSING=""
-for pkg in pygubu PIL numpy; do
+for pkg in pygubu PIL numpy pymodbus; do
     "$VENV_PY" -c "import $pkg" >/dev/null 2>&1 || MISSING="$MISSING $pkg"
 done
 
 if [ -n "$MISSING" ]; then
     echo "Installiere fehlende Pakete:$MISSING ..."
-    "$VENV_PY" -m pip install --quiet pygubu Pillow numpy
+    "$VENV_PY" -m pip install --quiet pygubu Pillow numpy pymodbus
 fi
 
 exec "$VENV_PY" gui/my_gui.py
