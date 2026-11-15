@@ -6,348 +6,89 @@ einfacher Erklärung inklusive Zusammenhänge. `...` in Codeausschnitten = Code 
 
 ---
 
-# Datei 1: `fr20_ceiling_gazebo.py`
+# Datei 1: `fr20_scene.py`
 
-## Abschnitt 1: Docstring + Imports + `import_gz()`
-
-```python
-import argparse, importlib, json, os, shutil, subprocess, sys, time
-import xml.etree.ElementTree as ET
-from pathlib import Path
-
-import bending_head_motor as bhm
-
-_GZ_VERSION_SUFFIXES = ("", "10", "11", ..., "18")
-
-def import_gz(base: str, submodule: str = ""):
-    for suffix in _GZ_VERSION_SUFFIXES:
-        name = f"gz.{base}{suffix}" + (f".{submodule}" if submodule else "")
-        try:
-            return importlib.import_module(name)
-        except ModuleNotFoundError:
-            continue
-    raise ModuleNotFoundError(...)
-```
-
-Diese Datei ist das Fundament des ganzen Projekts — sie baut zur Laufzeit eine 3D-Welt in
-Gazebo (dem Physik-Simulator), setzt den FR20-Roboterarm kopfüber an die "Decke" und stellt
-Funktionen bereit, mit denen andere Dateien (`robot_program.py`, `gui/`) den Arm bewegen.
-Alle anderen Dateien importieren sie meist als `sim`.
-
-`import_gz()`: Gazebos Python-Module heißen je nach installierter Version unterschiedlich
-(`gz.transport` oder `gz.transport13`). Diese Funktion probiert einfach alle plausiblen Namen
-durch und nimmt den ersten, der existiert — statt eines festen Imports, der nur auf manchen
-Rechnern klappt.
-
-## Abschnitt 2: Konfiguration — Raum, Tisch, Baugruppe
+## Abschnitt 1: Zweck und Konfiguration
 
 ```python
 MODEL_NAME = "fr20"
-ROOM_SIZE_XY = 4.0
-CEILING_Z = 2.0
-MOUNT_XY = (0.0, 0.0)
-
-TABLE_CENTER = MOUNT_XY
-TABLE_TOP_Z = 0.75
-
-ASSEMBLY_MESH_PATH = REPO_ROOT / "meshes" / "baugruppe1" / "Baugruppe1.stl"
-ASSEMBLY_MESH_SCALE = 0.001  # mm -> m
-ASSEMBLY_XY_OFFSET_M = (-0.0252107, -0.0048693)
-ASSEMBLY_MIN_Z_M = -0.021
-ASSEMBLY_SIZE_XY_M = (0.7, 1.705)
-
-TABLE_MARGIN_M = 0.05
-TABLE_END_OVERHANG_M = 0.15
-TABLE_SIZE_XY = (...)
+WORK_DIR = REPO_ROOT / "generated"          # erzeugtes URDF, nicht im Repo
+CEILING_Z = 2.0                              # Montagehöhe der Roboterbasis
+TABLE_TOP_Z = 0.75                           # Tischoberkante
+ASSEMBLY_TOP_Z = TABLE_TOP_Z + 0.045         # Oberkante der Baugruppe
+APPROACH_Z = ASSEMBLY_TOP_Z + 0.05           # sichere Arbeitshöhe des Flanschs
+CALIBRATION_REFERENCE_XYZ = (..., ..., APPROACH_Z)
+FLANGE_OFFSET_M = 0.12                       # wrist3-Frame -> Flanschfläche
+JOINT_LIMITS_RAD = {"j1": (-3.0543, 3.0543), "j2": (-4.6251, 1.4835), ...}
 ```
 
-Ein "Baukasten" mit Maßangaben (in Metern, außer wo mm markiert). Der Raum ist 4×4m, 2m hoch;
-der Roboter hängt mittig an der Decke. Die Baugruppe (`ASSEMBLY_*`) ist dein reales
-3D-Bauteil als STL-Datei — STL aus SolidWorks ist in mm, Gazebo rechnet in m, daher
-`ASSEMBLY_MESH_SCALE`. Die Bounding-Box-Werte wurden einmalig aus der Datei ausgemessen. Der
-Tisch wird nicht aus einer Datei geladen, sondern einfach als Quader berechnet, etwas größer
-als die Baugruppe.
+Die zentrale Datei der Zelle: Raum, Tisch, Baugruppe, Biegekopf-Testachse, feste Gelenkposen
+(`LOOK_AT_TABLE_POSE`, `SAFE_STAGING_POSE`), Gelenkgrenzen und -geschwindigkeiten. Alle
+anderen Dateien importieren sie als `sim`.
 
-## Abschnitt 3: Kalibrierpunkt, Gelenke, Roboter-Posen
+Wichtig: `FLANGE_OFFSET_M`. Im Original-URDF endet die Kette im wrist3-Frame, die
+Flanschfläche liegt aber 12 cm weiter vorne (höchster Punkt im `wrist3_link.STL`). Früher saß
+`tool0` im wrist3-Frame. Ein Programmpunkt mit „z = 0.807“ (knapp über der Baugruppe) hat den
+Flansch dadurch real auf z = 0.687 gedrückt, also in den Tisch. Jetzt liegt `tool0` auf der
+Flanschfläche, und alle x/y/z-Punkte meinen die Flanschmitte.
+
+## Abschnitt 2: Hilfsfunktionen
 
 ```python
-CALIBRATION_REFERENCE_XYZ = (...)  # markanter Punkt auf der Baugruppe, +0.3/-0.1 versetzt
-TABLE_OFFSET_PATH = REPO_ROOT / "table_offset.json"
-JOINT_NAMES = ["j1", "j2", "j3", "j4", "j5", "j6"]
-LOOK_AT_TABLE_POSE = {...}   # fertige Gelenkstellung: Blick senkrecht auf Tischmitte
-SAFE_STAGING_POSE = {...}    # sichere Zwischenstellung
-SAFE_TRAVEL_Z = 1.4
+class JointCommand: data            # Sollwinkel (rad) für publishers[gelenk].publish()
+def load_table_offset() / save_table_offset(dx, dy, dz)
+def write_mount_urdf(path)          # world -> base_link (kopfüber), wrist3 -> tool0 (+0.12 m)
+def send_joint_pose(pose, publishers)   # alle Gelenke atomar setzen
+def wait_until_reached(publishers)
+def send_to_safe_staging_pose(publishers) / send_look_at_table_pose(publishers)
+def launch_simulation(headless=False) -> (proc, publishers)   # -> rviz_backend.launch()
+def shutdown_simulation(proc)
 ```
 
-`CALIBRATION_REFERENCE_XYZ`: Referenzpunkt für die Nullpunkt-Kalibrierung, mit Versatz, weil
-die exakte Tischmitte auf der Drehachse von Gelenk j1 liegt (kinematische Singularität — dort
-gibt's keine eindeutige IK-Lösung). `JOINT_NAMES`: der FR20 hat 6 Drehgelenke (6
-Freiheitsgrade, damit das Werkzeug jede Position+Ausrichtung erreichen kann).
-`SAFE_STAGING_POSE`/`SAFE_TRAVEL_Z`: der wichtigste Sicherheitsmechanismus — ein direkter
-Sprung von der Start- zur Zielstellung würde oft durch den Tisch schwingen (Gelenkraum ≠
-gerader Weg im echten Raum), deshalb wird immer erst eine sichere Zwischenstellung angefahren.
+`write_mount_urdf()` hängt den FR20 per 180°-Drehung um X an die Decke und setzt `tool0`
+auf den Flansch. `launch_simulation()` startet RViz2 (siehe Datei 1b) und liefert pro Gelenk
+einen „Publisher“ mit `publish(msg)`. Das ist dieselbe Schnittstelle, die GUI, Jog,
+`robot_program.py` und `bending_head_motor.py` verwenden.
 
-## Abschnitt 4: PID-Gains und Geschwindigkeitsgrenzen der Gelenke
+---
+
+# Datei 1b: `rviz_backend.py`
 
 ```python
-JOINT_GAINS = {"j1": (6000, 0, 950), "j2": (12000, 0, 2200), ...}
-JOINT_VELOCITY_LIMIT_RAD_S = {"j1": 3.15, ...}
+def write_rviz_urdf(path)       # Roboter + Tisch + Baugruppe + Biegekopf-Testachse
+class _JointStateLoop:          # rclpy-Thread, veröffentlicht /joint_states mit 30 Hz
+    def set_targets(targets)    # neues Segment: alle Armgelenke SYNCHRON
+    def wait_until_reached(timeout_s)
+    def current()
+class RvizProcess               # robot_state_publisher + rviz2, Popen-ähnlich
+def launch(headless=False) -> (RvizProcess, publishers)
 ```
 
-Jedes Gelenk wird von einem PID-Regler gesteuert: P reagiert auf die aktuelle Abweichung, I
-(hier immer 0) auf aufsummierten Dauerfehler, D bremst basierend auf der
-Änderungsgeschwindigkeit (verhindert Überschwingen). j2 (Schultergelenk) hat die höchsten
-Werte, weil es das meiste Gewicht trägt. Die Geschwindigkeitsgrenzen stammen direkt aus der
-Hersteller-URDF und werden später in `robot_program.py` genutzt, um genug Wartezeit
-einzuplanen.
+RViz2 zeigt nur an, es gibt keine Physik. `robot_state_publisher` rechnet aus URDF und
+`/joint_states` die TF-Frames. `_JointStateLoop` fährt bei jedem neuen Ziel alle sechs
+Armgelenke gleichzeitig los und lässt sie gleichzeitig ankommen; die Dauer bestimmt das
+langsamste Gelenk. Damit ist die gefahrene Bahn genau die lineare Gelenkraum-Bahn, die
+`fr20_collision` vorher prüft, und entspricht einem PTP/MoveJ am echten Roboter. Vorher fuhr
+jedes Gelenk unabhängig mit Maximalgeschwindigkeit, also auf einer ungeprüften Bahn.
 
-## Abschnitt 5: Biegekopf-Testachsen-Konstanten + `WORK_DIR`
+---
+
+# Datei 1c: `fr20_collision.py`
 
 ```python
-BENDING_HEAD_MODEL_NAME = "bending_head_axis"
-BENDING_HEAD_JOINT_NAME = "bend"
-BENDING_HEAD_EFFORT_NM = bhm.TORQUE_LIMIT_NM   # Querverweis zu bending_head_motor.py
-BENDING_HEAD_VELOCITY_RAD_S = 1.0
-BENDING_HEAD_INERTIA_YY_KGM2 = 0.05
-BENDING_HEAD_GAINS = (1.8, 0, 0.6)
-BENDING_HEAD_SHAFT_LENGTH_M = 0.4
-BENDING_HEAD_XY = (...)  # neben dem Tisch positioniert
-BENDING_HEAD_Z = TABLE_TOP_Z + 0.05
-
-WORK_DIR = Path(__file__).resolve().parent / "gazebo_fr20_ceiling_generated"
+CLEARANCE_MARGIN_M = 0.03       # Mindestabstand Arm <-> Hindernis
+def obstacles(offset_xyz) -> [Box("Tisch"), Box("Baugruppe"), Box("Biegekopf"), Box("Boden")]
+def link_points()               # Punktwolke je Armglied aus den STL-Meshes (2-cm-Raster)
+def pose_clearance(joints) -> Clearance(distance_m, link, obstacle)
+def path_clearance(a, b) -> Clearance   # entlang der linearen Gelenkraum-Bahn a -> b
+def is_pose_safe(joints) / is_path_safe(a, b)
 ```
 
-Konstanten für die rein virtuelle Test-Achse in Gazebo (Platzhalter für den echten
-Biegekopf-Motor, um Kinematik/Timing zu testen, bevor die Modbus-Hardware fertig ist).
-`BENDING_HEAD_EFFORT_NM` übernimmt das reale Drehmoment-Limit aus `bending_head_motor.py`,
-damit der Wert nur an einer Stelle gepflegt wird. `WORK_DIR` ist der Ordner, in den die
-generierten URDF-/SDF-Dateien geschrieben werden — nichts davon ist von Hand geschrieben,
-alles wird bei jedem Start neu zusammengebaut.
-
-## Abschnitt 6: Hilfsfunktionen (Teil 1) — Prozess-/Umgebungs-Helfer
-
-```python
-def isolate_gz_partition() -> None:
-    os.environ["GZ_PARTITION"] = f"fr20_ceiling_{os.getpid()}"
-
-def gazebo_env_with_fr20_meshes() -> dict:
-    ...  # trägt den Repo-Ordner in GZ_SIM_RESOURCE_PATH ein
-
-def check_tool(name: str) -> None:
-    if shutil.which(name) is None: sys.exit("Fehler: ...")
-
-def load_table_offset() / save_table_offset(dx, dy, dz):
-    ...  # liest/schreibt table_offset.json
-
-def run(cmd, **kwargs):
-    print(f"$ {' '.join(cmd)}")
-    return subprocess.run(cmd, check=True, **kwargs)
-```
-
-`isolate_gz_partition()`: verhindert, dass sich mehrere Gazebo-Läufe gegenseitig stören
-(nutzt die Prozess-ID als eindeutigen Namen). `gazebo_env_with_fr20_meshes()`: sorgt dafür,
-dass Gazebo die 3D-Meshes des Arms findet (kein installiertes ROS-Paket, liegt im Repo).
-`check_tool()`: prüft, ob z.B. `gz` installiert ist, mit klarer Fehlermeldung.
-`load_table_offset()`/`save_table_offset()`: das Kalibrierungs-Speicherpaar. `run()`: kleiner
-Wrapper, der den Befehl vor der Ausführung ausgibt.
-
-## Abschnitt 7: `write_mount_urdf()` und `append_joint_position_controllers()`
-
-```python
-def write_mount_urdf(path: Path) -> None:
-    tree = ET.parse(FR20_SOURCE_URDF)
-    robot = tree.getroot()
-    # fügt "world"-Link + fixes Gelenk world->base_link ein (180°-Kippung = kopfüber)
-    # fügt "tool0"-Link + fixes Gelenk wrist3_link->tool0 ein
-    tree.write(path, ...)
-
-def append_joint_position_controllers(urdf_path: Path) -> None:
-    # hängt pro Gelenk ein JointPositionController-Plugin an (macht es über
-    # gz-transport ansteuerbar), Gains aus JOINT_GAINS
-```
-
-URDF = XML-Textdatei, die den Roboter als Kette von Links (starre Teile) und Joints (Gelenke)
-beschreibt. Das offizielle Hersteller-URDF geht davon aus, dass der Arm auf dem Boden steht —
-`write_mount_urdf()` fügt per Code einen "world"-Verankerungspunkt (kopfüber gekippt) und
-einen "tool0"-Namen für die Werkzeugspitze ein, ohne die Originaldatei zu verändern.
-`append_joint_position_controllers()` macht die 6 Gelenke tatsächlich fernsteuerbar, indem
-für jedes ein Steuerungs-Plugin mit Topic-Namen (`/fr20/j1/cmd_pos` usw.) angehängt wird.
-
-## Abschnitt 8: `urdf_to_sdf_model()`
-
-```python
-def urdf_to_sdf_model(urdf_path: Path) -> str:
-    result = run(["gz", "sdf", "-p", str(urdf_path)], capture_output=True, text=True, env=...)
-    sdf_text = result.stdout
-    start = sdf_text.index("<model")
-    end = sdf_text.rindex("</model>") + len("</model>")
-    return sdf_text[start:end]
-```
-
-URDF beschreibt nur einen Roboter, SDF (Gazebos eigenes Format) eine ganze Welt (Boden,
-Wände, mehrere Modelle). Diese Funktion ruft das Kommandozeilentool `gz sdf -p` auf, das
-URDF→SDF umwandelt, und schneidet aus der Ausgabe nur das `<model>...</model>`-Stück heraus.
-Der Roboter soll von Anfang an Teil der Welt-Datei sein (nicht nachträglich reingespawnt),
-damit er zuverlässig im Simulationsfenster angezeigt wird.
-
-## Abschnitt 9: `build_bending_head_model_sdf()`
-
-```python
-def build_bending_head_model_sdf() -> str:
-    return f"""
-    <model name="{BENDING_HEAD_MODEL_NAME}">
-      <link name="stand"> ... </link>          <!-- fixer Sockel -->
-      <link name="shaft">                       <!-- drehbare Welle -->
-        <inertial>...</inertial>
-        <collision>...<cylinder>...</cylinder></collision>
-        <visual>...</visual>
-        <collision name="collision_marker">...<box>...</box></collision>  <!-- "Fahne" -->
-        <visual name="visual_marker">...</visual>
-      </link>
-      <joint name="stand_fixed" type="fixed">...</joint>
-      <joint name="{BENDING_HEAD_JOINT_NAME}" type="revolute">
-        <axis><xyz>0 1 0</xyz><limit>...</limit></axis>
-      </joint>
-      <plugin ...JointPositionController.../>
-    </model>"""
-```
-
-Die Biegekopf-Testachse: ein fixer Ständer + eine um die Y-Achse drehbare Welle. `<collision>`
-ist die Geometrie, mit der die Physik rechnet (oft vereinfacht), `<visual>` was man sieht.
-Ein reiner Zylinder wäre um seine eigene Achse rotationssymmetrisch — man würde eine Drehung
-gar nicht sehen — deshalb sitzt eine kleine, außermittig platzierte "Fahne" (Marker) fix an
-der Welle, rein kosmetisch. Das `<plugin>` am Ende macht die Achse über
-`/bending_head_axis/bend/cmd_pos` ansteuerbar, genau wie die Arm-Gelenke.
-
-## Abschnitt 10: `build_world_sdf()`
-
-```python
-def build_world_sdf(robot_model_sdf: str) -> str:
-    def wall(name, pose, size) -> str: ...   # eine Wand bauen (DRY-Prinzip)
-    walls = "".join([wall("wall_north", ...), wall("wall_south", ...), wall("wall_east", ...)])
-    # wall_west fehlt bewusst - Standardkamera blickt von dort hinein
-
-    return f"""<sdf ...><world ...>
-      <physics .../> <plugin .../>  <!-- Physics, UserCommands, SceneBroadcaster, Sensors -->
-      <light .../>
-      <model name="ground_plane">...</model>
-      <model name="ceiling">...</model>
-{walls}
-      <model name="table">...</model>
-      <model name="assembly">...</model>
-{build_bending_head_model_sdf()}
-{robot_model_sdf}
-    </world></sdf>"""
-```
-
-Die Dachfunktion, die alles zu einer kompletten Welt zusammenfügt. `wall()` ist eine lokale
-Hilfsfunktion, um die vier (hier: drei) Wände nicht viermal zu wiederholen. Wände/Decke sind
-transparent (`WALL_ALPHA`), damit der Roboter aus jedem Winkel sichtbar bleibt, die
-Kollisionsgeometrie bleibt trotzdem real. Am Ende werden `{build_bending_head_model_sdf()}`
-und `{robot_model_sdf}` (kommt als Parameter rein, aus Abschnitt 8) einfach an der richtigen
-Stelle eingesetzt — jede Funktion kümmert sich um genau einen Teil der Welt.
-
-## Abschnitt 11: `wait_for_world()` und `send_joint_pose()`
-
-```python
-def wait_for_world(world_name, timeout=60.0) -> None:
-    while noch Zeit übrig:
-        if "/world/<name>/control" in gz-Diensteliste: return
-        time.sleep(0.5)
-    raise TimeoutError(...)
-
-def send_joint_pose(pose: dict, publishers=None) -> None:
-    if publishers is None:
-        # eigenen Node + Publisher pro Gelenk aufbauen (Standalone-Aufruf)
-    for _ in range(5):  # mehrfach senden, gegen verlorene erste Discovery-Nachrichten
-        for joint, angle in pose.items():
-            publishers[joint].publish(Double-Nachricht mit angle)
-        time.sleep(0.3)
-```
-
-`wait_for_world()`: Polling-Schleife, die wartet, bis Gazebo die Welt vollständig geladen hat
-(prüft alle 0.5s, ob ein interner Dienst schon existiert). Wirft `TimeoutError` statt
-`sys.exit()`, weil letzteres in Hintergrund-Threads (GUI) nicht sauber abgefangen würde.
-`send_joint_pose()`: die zentrale "Bewege den Arm"-Funktion — schickt Zielwinkel pro Gelenk
-über gz-transport, mehrfach hintereinander gesendet, weil die allerersten Nachrichten nach
-Verbindungsaufbau verloren gehen können.
-
-## Abschnitt 12: `send_to_safe_staging_pose()` und `send_look_at_table_pose()`
-
-```python
-def send_to_safe_staging_pose(publishers=None) -> None:
-    send_joint_pose(SAFE_STAGING_POSE, publishers)
-    time.sleep(1.0)  # Zeit zum tatsächlichen Erreichen
-
-def send_look_at_table_pose(publishers=None) -> None:
-    send_joint_pose(LOOK_AT_TABLE_POSE, publishers)
-```
-
-Benannte Wrapper um `send_joint_pose()` für die beiden festen Posen aus Abschnitt 3. Werden
-praktisch immer als Paar nacheinander aufgerufen: erst sicher zur Zwischenstellung, dann zur
-Zielstellung — derselbe zweistufige Ablauf, der in `robot_program.py` für beliebige
-Zielpunkte nochmal (allgemeiner) auftaucht.
-
-## Abschnitt 13: `launch_simulation()`
-
-```python
-def launch_simulation(headless=False) -> tuple[subprocess.Popen, dict]:
-    check_tool("gz"); check_tool("ros2")
-    isolate_gz_partition()
-
-    write_mount_urdf(urdf_path)
-    append_joint_position_controllers(urdf_path)
-    robot_model_sdf = urdf_to_sdf_model(urdf_path)
-    world_path.write_text(build_world_sdf(robot_model_sdf))
-
-    gz_proc = subprocess.Popen(["gz", "sim", "-r", str(world_path), ...], env=...)
-    wait_for_world(WORLD_NAME)
-    time.sleep(2.0)
-
-    publishers = {j: node.advertise(...) for j in JOINT_NAMES}
-    publishers["bending_head"] = node.advertise(...)
-    return gz_proc, publishers
-```
-
-Die wichtigste Funktion der Datei — ruft alles bisher Besprochene zusammen. Praktisch jede
-andere Datei im Projekt startet eine Simulation über genau diesen einen Funktionsaufruf.
-Ablauf: Vorbedingungen prüfen → Dateien vorbereiten (URDF/SDF, Abschnitte 7+8+10) → Gazebo als
-Subprozess starten (`Popen`, nicht-blockierend, läuft im Hintergrund weiter) → warten bis
-bereit → Publisher pro Gelenk (+ Biegekopf-Testachse) aufbauen. Rückgabe `(gz_proc,
-publishers)` ist der zentrale "Handshake": damit kann der Aufrufer den Arm steuern und die
-Simulation später sauber beenden.
-
-## Abschnitt 14: `shutdown_simulation()` und `main()`
-
-```python
-def shutdown_simulation(gz_proc) -> None:
-    if gz_proc.poll() is None:
-        gz_proc.terminate()          # freundlich
-        try: gz_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired: gz_proc.kill()   # erzwungen
-
-def main() -> None:
-    args = parser.parse_args()  # nur --headless
-    gz_proc, publishers = launch_simulation(headless=args.headless)
-    try:
-        send_to_safe_staging_pose(publishers)
-        send_look_at_table_pose(publishers)
-        gz_proc.wait()
-    except KeyboardInterrupt:
-        print("Beende Gazebo ...")
-    finally:
-        shutdown_simulation(gz_proc)
-
-if __name__ == "__main__":
-    main()
-```
-
-`shutdown_simulation()`: zweistufiges Beenden — erst freundlich (`terminate`), nach 10s
-notfalls erzwungen (`kill`), damit nie ein Geister-Prozess hängen bleibt. `main()`: der
-CLI-Einstiegspunkt beim direkten Start. `try/except/finally`: `finally` läuft garantiert immer
-(auch bei Strg+C), dort steht das Herunterfahren, damit Gazebo in jedem Fall sauber beendet
-wird. `if __name__ == "__main__":` sorgt dafür, dass das nur beim direkten Start passiert,
-nicht wenn eine andere Datei nur importiert.
+Prüft die echte Geometrie aller Armglieder (nicht nur die Gelenkpunkte wie früher) gegen
+achsparallele Quader. `path_clearance()` tastet die Bahn adaptiv ab: Ist der Abstand groß,
+wird in großen Schritten geprüft (kein Armpunkt kann sich bis zur nächsten Probe weiter
+bewegen als der Restabstand), nah am Tisch fein (max. 0.5° pro Gelenk). Ein Werkzeug am
+Flansch ist noch nicht modelliert.
 
 ---
 
@@ -358,7 +99,7 @@ nicht wenn eine andere Datei nur importiert.
 ```python
 import xml.etree.ElementTree as ET
 import numpy as np
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
 
 def _rpy_to_matrix(roll, pitch, yaw) -> np.ndarray:
     rz = ...; ry = ...; rx = ...   # Elementardrehungen um Z, Y, X
@@ -508,61 +249,31 @@ def list_programs() -> list[Path]:
 Wandeln eine JSON-Datei in echte `Point`/`Program`-Objekte um. `list_programs()` listet alle
 `.json`-Dateien im `programs/`-Ordner auf.
 
-## Abschnitt 3: Hilfswerte für die Kollisionsprüfung
+## Abschnitt 3: Kollisionsfreie Bahnplanung (`plan_motion()`)
 
 ```python
-_DEFAULT_TOOL_R = ...  # Standard-Ausrichtung: Werkzeug zeigt nach unten
-def _rpy_deg_to_matrix(rpy_deg): ...   # Grad -> Radiant -> Rotationsmatrix
+class PlanningError(RuntimeError)
 
-_FALLBACK_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5)
-_FALLBACK_ELBOWS = (...)  # alternative Ellbogen-Stellungen
-_TABLE_CHECK_MARGIN_M = 0.05
+def _ik_candidates(target, seed, boxes, search=True):
+    # IK ab seed + Raster aus j1-Werten und Ellbogen-Stellungen (Ellbogen zur Decke zuerst)
+    # -> nur Lösungen, die selbst kollisionsfrei stehen, sortiert nach Nähe zu seed
 
-def _pose_hits_table(position) -> bool: ...  # liegt der Punkt über/im Tisch?
+def _plan_to_pose(start, goal, boxes):
+    1. direkt, wenn is_path_safe(start, goal)
+    2. senkrecht hoch (_lift: 5-cm-Schritte, so hoch wie sicher möglich), verfahren, absenken
+    3. wie 2., aber oben über die Parkpose (SAFE_STAGING_POSE mit passendem j1)
+    sonst None
+
+def plan_motion(point, current, offset_xyz) -> [Wegpunkte]   # oder PlanningError
+def resolve_point(point, current, allow_fallback=True, offset_xyz=...) -> Gelenkwinkel
 ```
 
-`_pose_hits_table()`: prüft, ob ein Punkt innerhalb der Tischfläche UND unterhalb der
-Tischplatte liegt (= Kollision). `_FALLBACK_J1`/`_FALLBACK_ELBOWS`: vorbereitete
-Alternativ-Startstellungen für die IK, falls sie vom aktuellen Ausgangspunkt keine Lösung
-findet.
-
-## Abschnitt 4: `_is_transition_safe()`
-
-```python
-def _is_transition_safe(a, b, steps=15) -> bool:
-    for frac in np.linspace(0, 1, steps):
-        inter = Zwischenstellung zwischen a und b
-        t = Vorwärtskinematik für diese Zwischenstellung
-        if _pose_hits_table(t[:3, 3]): return False
-    return True
-```
-
-Prüft nicht nur Start/Ende, sondern den ganzen Weg dazwischen: teilt die Bewegung in 15
-Zwischenschritte und prüft jeden auf Tisch-Kollision. Nötig, weil zwei sichere Stellungen
-über einen unsicheren Zwischenweg verbunden sein können.
-
-## Abschnitt 5: `resolve_point()`
-
-```python
-def resolve_point(point, current_joints_rad, allow_fallback=True) -> dict:
-    if point.joints_deg is not None:
-        return Grad -> Radiant  # direkt, fertig
-
-    primary = kin.inverse_kinematics(target, current_joints_rad)
-    if primary gefunden UND sicher: return primary
-
-    for j1 in _FALLBACK_J1:
-        for elbow in _FALLBACK_ELBOWS:
-            sol = kin.inverse_kinematics(target, alternativer_start)
-            candidates.append(sol)
-
-    return bester (sicherster, geringste Bewegung) Kandidat
-```
-
-Zentrale Funktion: übersetzt "wo soll der Arm hin" in "welche Gelenkwinkel". Erst der
-schnelle Versuch (IK von aktueller Stellung). Klappt das nicht/unsicher, wird mit mehreren
-Alternativ-Starts nochmal gesucht, am Ende die sicherste, am wenigsten sprunghafte Lösung
-gewählt.
+Übersetzt „wohin soll der Arm“ in eine Folge von Gelenkposen, bei der **jede** Teilbahn per
+`fr20_collision.is_path_safe()` geprüft ist. Gibt es keine sichere Lösung, wird mit
+`PlanningError` abgebrochen, bevor sich der Roboter bewegt. Früher wurde in diesem Fall
+trotzdem die erste IK-Lösung gefahren, und genau dann ging es durch den Tisch.
+`resolve_point()` liefert nur eine einzelne kollisionsfreie Zielpose (für den Jog, der den
+kurzen Weg dorthin anschließend selbst prüft).
 
 ## Abschnitt 6: `HOME_POINT`, `build_calibration_program()`, `calibrate_table_offset()`
 
@@ -584,25 +295,15 @@ def calibrate_table_offset(current_joints_rad) -> tuple:
 `calibrate_table_offset()`: vergleicht Ist- mit Soll-Position, speichert die Differenz als
 Korrekturwert.
 
-## Abschnitt 7: `_interruptible_sleep()` und `_build_travel_waypoints()`
+## Abschnitt 7: `_interruptible_sleep()`
 
 ```python
 def _interruptible_sleep(seconds, stop_event, abort_event=None) -> None:
     ...  # wie time.sleep(), kehrt aber sofort zurück bei Abbruch
 
-def _build_travel_waypoints(point, current_joints_rad, offset_xyz=(0,0,0)) -> list:
-    if point.xyz is None:
-        return [resolve_point(point, current_joints_rad)]  # Gelenkpose: direkt
-
-    retract = resolve_point(..., hoch über Startposition)
-    travel = resolve_point(..., hoch über Zielposition)
-    final = resolve_point(point, ...)
-    return [retract, travel, final]
 ```
 
-`_interruptible_sleep`: abbrechbares Warten. `_build_travel_waypoints`: praktischer
-Kollisionsschutz — erst hoch zurückziehen, seitlich verfahren, dann erst absenken, statt
-direkt quer zu fahren.
+`_interruptible_sleep`: abbrechbares Warten.
 
 ## Abschnitt 8: `_interrupted()`, `_wait_while()`, `_wait_for_step()`
 
@@ -632,10 +333,10 @@ def run_program(program, publishers, loop=False, stop_event=None, pause_event=No
     offset_xyz = sim.load_table_offset()
 
     def drive_to(point, current, abort_event=...):
-        waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
+        waypoints = plan_motion(point, current, offset_xyz=offset_xyz)  # kollisionsgeprüft
         for target in waypoints:
             _wait_while(pause_event, ...)   # ggf. Pause abwarten
-            send(target)                     # Winkel an Gazebo schicken
+            send(target)                     # Winkel an RViz schicken
             _interruptible_sleep(...)         # warten bis Bewegung fertig
         return current
 ```
@@ -685,31 +386,23 @@ Stopp (`stop_event`), da der Umweg dort nur stören würde. Das `abort_event=Non
 Nullpunkt-Anflug verhindert, dass ein bereits gesetztes Abbruch-Signal diese letzte,
 gewünschte Fahrt selbst wieder abbricht.
 
-## Abschnitt 11: `dry_run_program()`
+## Abschnitt 11: `check_program()` und `dry_run_program()`
 
 ```python
-def dry_run_program(program: Program) -> bool:
-    sim.write_mount_urdf(urdf_path)   # nur URDF, keine Simulation nötig
-    current = dict(sim.SAFE_STAGING_POSE)
-    all_ok = True
-    for point in program.points:
-        try:
-            waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
-        except (ValueError, RuntimeError) as exc:
-            print(f"FEHLER bei '{point.name}': {exc}")
-            all_ok = False
-            continue
-        for solution in waypoints:
-            print(f"'{point.name}': {Gelenkwinkel in Grad}")
-            current = solution
-    return all_ok
+def check_program(program, start, offset_xyz, home_at_end=True, verbose=False) -> [Fehler]:
+    for point in program.points + [HOME_POINT]:
+        waypoints = plan_motion(point, current, offset_xyz)   # PlanningError -> Fehlerliste
+        current = waypoints[-1]
+
+def dry_run_program(program) -> bool:
+    problems = check_program(program, SAFE_STAGING_POSE, verbose=True)
 ```
 
-Löst alle Punkte eines Programms auf und zeigt die berechneten Gelenkwinkel an — **ohne**
-Gazebo/ROS 2 zu starten und ohne irgendwas an einen echten oder simulierten Roboter zu
-schicken. Praktisch, um eine neue/geänderte Programmdatei schnell auf Fehler zu prüfen
-(unerreichbare Punkte, große Sprünge), bevor man überhaupt Gazebo startet — genau das haben
-wir in dieser Session mit `--dry-run` benutzt, um die Kürzungen zu verifizieren.
+`check_program()` plant das ganze Programm inklusive Nullpunkt-Rückfahrt durch, ohne etwas zu
+bewegen. `run_program()` ruft es vor der ersten Bewegung auf: Ist auch nur ein Punkt nicht
+kollisionsfrei erreichbar, startet das Programm gar nicht (in der GUI erscheint dann ein
+Warnfenster „Kollisionsgefahr“). `--dry-run` gibt pro Wegpunkt die Gelenkwinkel und den
+kleinsten Abstand zu Tisch/Baugruppe aus, ohne RViz zu starten.
 
 ## Abschnitt 12: CLI / `main()`
 
@@ -731,19 +424,19 @@ def main() -> None:
         ok = dry_run_program(program)
         raise SystemExit(0 if ok else 1)
 
-    gz_proc, publishers = sim.launch_simulation(headless=args.headless)
+    sim_proc, publishers = sim.launch_simulation(headless=args.headless)
     try:
         sim.send_to_safe_staging_pose(publishers)
         run_program(program, publishers, loop=args.loop)
-        gz_proc.wait()
+        sim_proc.wait()
     except KeyboardInterrupt:
         ...
     finally:
-        sim.shutdown_simulation(gz_proc)
+        sim.shutdown_simulation(sim_proc)
 ```
 
 Der Einstiegspunkt beim direkten Start (`python3 robot_program.py programs/....json`).
-Derselbe Aufbau wie schon in `fr20_ceiling_gazebo.main()` (Datei 1, Abschnitt 14): Simulation
+Derselbe Aufbau wie schon in `fr20_scene.main()` (Datei 1): Simulation
 starten, sicher zur Zwischenpose, Programm abfahren, sauber beenden per `finally`. `raise
 SystemExit(0 if ok else 1)` bei `--dry-run`: gibt einen Exit-Code zurück (0 = alles okay,
 1 = Fehler) — nützlich, wenn man das automatisiert aufruft und das Ergebnis auswerten will.
@@ -900,24 +593,24 @@ Aus-Ein-Wechsel des Strobe-Signals aus (eine "Flanke" — Motoren/Verstärker re
 den Wechsel eines Signals, nicht auf seinen Zustand). Danach wird gewartet, bis der Verstärker
 "fertig" meldet (`BUSY`-Bit wird 0), mit Timeout als Absicherung, falls das nie passiert.
 
-## Abschnitt 7: `GazeboBendingBackend`
+## Abschnitt 7: `RvizBendingBackend`
 
 ```python
-class GazeboBendingBackend:
+class RvizBendingBackend:
     def __init__(self, publishers, start_position_deg=0.0):
         self._current_rad = math.radians(start_position_deg)
         sim.send_joint_pose({"bending_head": self._current_rad}, publishers)
 
-    def connect(self, torque_limit_nm): print(f"[Gazebo] ... (gilt hier nur real)")
+    def connect(self, torque_limit_nm): print(f"[RViz] ... (gilt hier nur real)")
 
     def move_by(self, delta):
         self._current_rad += math.radians(delta)
-        # neue absolute Position an Gazebo senden
+        # neue absolute Position an RViz senden
 ```
 
 Das Backend, das wir in dieser Session gemeinsam gebaut und getestet haben — steuert die
-Test-Achse aus Datei 1 (Abschnitt 9) in Gazebo an, statt echte Hardware. Wichtiger Unterschied
-zu den anderen Backends: der Gazebo-Regler erwartet immer eine **absolute** Zielposition, kein
+Test-Achse aus Datei 1b (`write_rviz_urdf`) in RViz an, statt echte Hardware. Wichtiger Unterschied
+zu den anderen Backends: der Simulation erwartet immer eine **absolute** Zielposition, kein
 "fahre um X weiter" — deshalb führt dieses Backend die absolute Position selbst nach
 (`_current_rad`, wird bei jedem `move_by()` weiter aufaddiert).
 
@@ -982,15 +675,15 @@ def main() -> None:
     parser.add_argument("delta", type=float)
     parser.add_argument("--port", default="/dev/ttyUSB0")
     mode.add_argument("--simulate", action="store_true")
-    mode.add_argument("--gazebo", action="store_true")
+    mode.add_argument("--rviz", action="store_true")
     parser.add_argument("--headless", action="store_true")
     args = parser.parse_args()
 
-    if args.gazebo:
-        gz_proc, publishers = sim.launch_simulation(headless=args.headless)
-        axis = BendingHeadAxis(GazeboBendingBackend(publishers))
+    if args.rviz:
+        sim_proc, publishers = sim.launch_simulation()
+        axis = BendingHeadAxis(RvizBendingBackend(publishers))
         axis.move_by(args.delta)
-        gz_proc.wait()
+        sim_proc.wait()
         return
 
     backend = SimulatedBendingBackend() if args.simulate else ModbusRTUBendingBackend(port=args.port)
@@ -998,10 +691,10 @@ def main() -> None:
     axis.move_by(args.delta)
 ```
 
-Drei Betriebsarten über Kommandozeilen-Flags: `--simulate` (nur loggen), `--gazebo` (Test in
+Drei Betriebsarten über Kommandozeilen-Flags: `--simulate` (nur loggen), `--rviz` (Test in
 der Simulation, genau das haben wir in dieser Session mehrfach so aufgerufen), oder ohne Flag
 = echte Hardware über `--port`. `mode.add_mutually_exclusive_group()` (nicht extra gezeigt,
-aber im echten Code) sorgt dafür, dass man nicht versehentlich `--simulate` und `--gazebo`
+aber im echten Code) sorgt dafür, dass man nicht versehentlich `--simulate` und `--rviz`
 gleichzeitig angeben kann.
 
 **Damit ist `bending_head_motor.py` komplett durch.**
@@ -1178,7 +871,7 @@ Y-/Z+/Z-/Rot+/Rot-) nicht dreimal (für die drei Jog-Fenster) einzeln aufzuschre
 
 ```python
 class ProgramMixin:
-    def _ensure_simulation_running(self) -> dict: ...   # startet Gazebo einmalig
+    def _ensure_simulation_running(self) -> dict: ...   # startet RViz einmalig
     def _stop_running_program(self, graceful=False) -> bool: ...
     def _run_program_async(self, program_source, on_done=None, home_at_end=True) -> None: ...
     def on_gelenkpose_pressed(self) / on_tisch_pressed(self): ...
@@ -1214,7 +907,7 @@ class BendingMixin:
 
 Analog zu `ProgramMixin`, aber für den Biegekopf-Testlauf (Datei 4, `bending_head_motor.py`)
 — läuft in einem eigenen Thread, unabhängig vom Arm-Programm, weil es ein anderer Motor ist.
-`on_biegekopf_pressed()` nutzt bewusst `GazeboBendingBackend` (nicht die echte
+`on_biegekopf_pressed()` nutzt bewusst `RvizBendingBackend` (nicht die echte
 Modbus-Hardware) — ein Testen-Button in der GUI soll nicht versehentlich den echten Servo
 ansteuern können, solange die Register-Adressen noch nicht final verdrahtet sind (siehe Datei
 4, Abschnitt 5-6).
@@ -1264,7 +957,7 @@ wieder über `self.mainwindow.after(0, ...)` auf dem Haupt-Thread.
 ## Abschnitt 8: `gui/my_gui.py` — der Zusammenbau
 
 ```python
-sys.path.insert(0, str(REPO_ROOT))   # damit fr20_ceiling_gazebo etc. gefunden werden
+sys.path.insert(0, str(REPO_ROOT))   # damit fr20_scene etc. gefunden werden
 
 from style_mixin import StyleMixin
 from jog_mixin import JogMixin
@@ -1285,7 +978,7 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
 
     def on_beenden_pressed(self): self.on_close()
     def on_close(self): ...    # zentrale Aufräum-Routine
-    def run(self): ...          # zeigt zuerst Kalibrierung, startet Gazebo im Hintergrund
+    def run(self): ...          # zeigt zuerst Kalibrierung, startet RViz im Hintergrund
 
 if __name__ == '__main__':
     app = MyApp()
@@ -1295,7 +988,7 @@ if __name__ == '__main__':
 Der "Dirigent": importiert alle Mixins, baut `MyApp` daraus zusammen, und übernimmt nur noch
 das, was wirklich zentral/gemeinsam ist — die Initialisierung aller Zustandsvariablen
 (`__init__`), das Aufräumen beim Beenden (`on_close`, stoppt alle laufenden Programme, fährt
-Gazebo runter) und den Programmstart (`run()`). `builder.connect_callbacks(self)` ist der
+RViz runter) und den Programmstart (`run()`). `builder.connect_callbacks(self)` ist der
 Moment, in dem pygubu tatsächlich nachschaut, welche Methoden auf `self` existieren (egal aus
 welchem Mixin) und sie an die passenden Knöpfe im `.ui`-Layout bindet.
 
@@ -1304,19 +997,20 @@ welchem Mixin) und sie an die passenden Knöpfe im `.ui`-Layout bindet.
 ## Zusammenfassung: wie alles zusammenhängt
 
 ```
-fr20_ceiling_gazebo.py   <- Fundament: baut die Gazebo-Welt, startet/stoppt sie, sendet Winkel
+fr20_scene.py            <- Fundament: Zellengeometrie, Posen, URDF, Start/Stopp, sendet Winkel
         ↑                    (importiert als "sim" praktisch überall)
-        |
+        |                    rviz_backend.py: RViz2-Anzeige + synchrone Gelenkfahrt
 fr20_kinematics.py       <- Mathematik: Gelenkwinkel <-> Position im Raum
         ↑
-        |
-robot_program.py         <- fährt Punktprogramme ab, nutzt sim + kin, Kollisionsvermeidung
+fr20_collision.py        <- Abstand der Armglieder (STL-Meshes) zu Tisch/Baugruppe
+        ↑
+robot_program.py         <- fährt Punktprogramme ab, plant kollisionsfreie Bahnen
         ↑
         |
 gui/ (constants, style_mixin, jog_mixin, program_mixin,    <- Bedienoberfläche, nutzt
       bending_mixin, options_mixin, log_mixin, my_gui.py)      robot_program + bending_head_motor
 
-bending_head_motor.py    <- steuert den echten Biegekopf-Servo an (Simulate/Modbus/Gazebo)
+bending_head_motor.py    <- steuert den echten Biegekopf-Servo an (Simulate/Modbus/RViz)
         ↑ (nur informativ, kein Code-Import in die andere Richtung)
         |
 biegekraft_rechner.py    <- eigenständiges Rechen-Tool, hilft bei der Motor-/Getriebeauswahl

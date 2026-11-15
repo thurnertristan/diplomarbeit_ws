@@ -2,9 +2,9 @@
 # Startet die FR20-Steuerungs-GUI (gui/my_gui.py) mit EINEM Befehl, egal ob
 # schon ein venv existiert, ob es aktiviert ist, oder ob pygubu/Pillow/numpy/
 # pymodbus schon installiert sind:
-#   - sourced ROS 2 (für Gazebo/gz-transport), falls vorhanden
+#   - sourced ROS 2 (für RViz2/rclpy), falls vorhanden
 #   - legt gui/venv an, falls es fehlt (inkl. Zugriff auf System-Pakete für
-#     die gz-Bindings, siehe gui/venv/pyvenv.cfg)
+#     rclpy, siehe gui/venv/pyvenv.cfg)
 #   - installiert fehlende Python-Pakete (pygubu, Pillow, numpy, pymodbus -
 #     letzteres für die reale Modbus-RTU-Ansteuerung des Biegekopf-Motors,
 #     siehe bending_head_motor.py) automatisch nach - dafür ist beim
@@ -26,7 +26,7 @@ if [ -f /opt/ros/jazzy/setup.bash ]; then
     source /opt/ros/jazzy/setup.bash
     set -u
 else
-    echo "Warnung: /opt/ros/jazzy/setup.bash nicht gefunden - gz/ros2 evtl. nicht verfügbar." >&2
+    echo "Warnung: /opt/ros/jazzy/setup.bash nicht gefunden - ros2/rviz2 evtl. nicht verfügbar." >&2
 fi
 
 set -u
@@ -58,8 +58,8 @@ if [ ! -x "$VENV_PY" ]; then
 fi
 
 # Damit das venv zusätzlich zu seinen eigenen Paketen auch die apt-
-# installierten gz-Python-Bindings sieht (/usr/lib/python3/dist-packages) -
-# ohne das wäre "import gz.transport" im venv nicht auffindbar.
+# installierten ROS-2-Python-Pakete sieht (rclpy, sensor_msgs aus /opt/ros) -
+# ohne das wäre "import rclpy" im venv nicht auffindbar.
 if grep -q "include-system-site-packages = false" "$VENV_DIR/pyvenv.cfg" 2>/dev/null; then
     sed -i 's/include-system-site-packages = false/include-system-site-packages = true/' "$VENV_DIR/pyvenv.cfg"
 fi

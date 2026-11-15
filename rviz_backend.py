@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-"""RViz2-Backend: leichte Alternative zu Gazebo - nur 3D-Anzeige, keine Physik.
+"""RViz2-Simulation des deckenmontierten FR20 - nur 3D-Anzeige, keine Physik.
 
-Aktivieren mit der Umgebungsvariable FR20_SIM=rviz (siehe
-fr20_ceiling_gazebo.launch_simulation), z.B.:
-    FR20_SIM=rviz ./start_gui.sh
-    FR20_SIM=rviz python3 robot_program.py programs/beispiel_tisch.json
+Wird über fr20_scene.launch_simulation() gestartet (GUI, robot_program.py,
+bending_head_motor.py --rviz). Direkt:
+    python3 rviz_backend.py      # RViz2 + Beispielpose
 
 Ablauf:
-  1. Aus demselben URDF wie für Gazebo (write_mount_urdf) wird ein RViz-URDF erzeugt:
+  1. Aus dem Roboter-URDF (fr20_scene.write_mount_urdf) wird ein RViz-URDF erzeugt:
      Mesh-Pfade package:// -> file:// (fairino_description ist kein installiertes
-     ROS-Paket), dazu Tisch, Baugruppe und Biegekopf-Testachse als URDF-Links, damit die
-     Szene wie in Gazebo aussieht.
+     ROS-Paket), dazu Tisch, Baugruppe und Biegekopf-Testachse als URDF-Links.
   2. robot_state_publisher rechnet aus URDF + /joint_states die TF-Frames.
-  3. Ein eigener rclpy-Node veröffentlicht /joint_states mit 30 Hz. Gelenke fahren dabei
-     mit ihrer Maximalgeschwindigkeit (JOINT_VELOCITY_LIMIT_RAD_S) auf den Sollwert zu,
-     statt zu springen - ähnlich wie die Gelenkregler in Gazebo.
-  4. rviz2 zeigt das Ganze an (Konfiguration: rviz/fr20.rviz).
+  3. Ein eigener rclpy-Node veröffentlicht /joint_states mit 30 Hz. Alle Gelenke fahren
+     SYNCHRON auf ein neues Ziel (gleicher Start, gleiche Ankunft, Dauer vom langsamsten
+     Gelenk bestimmt) - genau die lineare Gelenkraum-Bahn, die fr20_collision vorher auf
+     Tischkollisionen prüft, und wie ein PTP/MoveJ am echten Roboter.
+  4. rviz2 zeigt das Ganze an (Konfiguration: rviz/fr20.rviz), dazu die Zielpunkte des
+     laufenden Programms als Marker (Topic /fr20_targets).
 
-Schnittstelle identisch zu Gazebo: launch() liefert (proc, publishers); `publishers[gelenk]
-.publish(msg)` nimmt eine Nachricht mit `.data` (Sollwinkel in rad) - so funktionieren GUI,
-Jog, robot_program.py und bending_head_motor.py ohne Änderung.
+`publishers[gelenk].publish(msg)` nimmt eine Nachricht mit `.data` (Sollwinkel in rad,
+fr20_scene.JointCommand).
 
-Unterschied zu Gazebo: keine Physik, keine Kollisionen, kein Überschwingen. Gut zum Prüfen
-von Bahnen, Posen und Erreichbarkeit, nicht für Dynamik.
+Keine Physik und keine eingebaute Kollisionserkennung: Kollisionen prüft fr20_collision.py.
 """
 
 from __future__ import annotations
@@ -36,20 +34,12 @@ import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
 
 RVIZ_CONFIG = sim.REPO_ROOT / "rviz" / "fr20.rviz"
 RVIZ_URDF = sim.WORK_DIR / f"{sim.MODEL_NAME}_rviz.urdf"
 PUBLISH_RATE_HZ = 30.0
-BENDING_JOINT = "bending_head"  # gleicher Schlüssel wie in den Gazebo-publishers
-
-
-class Double:
-    """Ersatz für gz.msgs.Double, falls die gz-Python-Pakete nicht installiert sind
-    (RViz-Betrieb braucht Gazebo nicht) - siehe sim.import_gz."""
-
-    def __init__(self) -> None:
-        self.data = 0.0
+BENDING_JOINT = sim.BENDING_HEAD_JOINT
 
 
 # ---------------------------------------------------------------------------
@@ -75,7 +65,7 @@ def _box(sx: float, sy: float, sz: float) -> ET.Element:
 
 
 def write_rviz_urdf(path: Path) -> None:
-    """Roboter-URDF wie für Gazebo, plus Umgebung (Tisch, Baugruppe, Biegekopf-Testachse)."""
+    """Roboter-URDF plus Umgebung (Tisch, Baugruppe, Biegekopf-Testachse)."""
     sim.write_mount_urdf(path)
     tree = ET.parse(path)
     robot = tree.getroot()
@@ -86,7 +76,7 @@ def write_rviz_urdf(path: Path) -> None:
         if filename.startswith("package://"):
             mesh.set("filename", "file://" + str(sim.REPO_ROOT / filename[len("package://"):]))
 
-    # Tisch (Box vom Boden bis TABLE_TOP_Z), Positionen wie in build_world_sdf().
+    # Tisch (Box vom Boden bis TABLE_TOP_Z).
     table_sx, table_sy = sim.TABLE_SIZE_XY
     _add_fixed_link(
         robot, "table", "world",
@@ -108,7 +98,7 @@ def write_rviz_urdf(path: Path) -> None:
         geometry, "0.7 0.7 0.72 1",
     )
 
-    # Biegekopf-Testachse: Ständer + drehbare Welle mit roter Fahne (wie in Gazebo).
+    # Biegekopf-Testachse: Ständer + drehbare Welle mit roter Fahne (Drehung sichtbar).
     stand_h = sim.BENDING_HEAD_Z
     shaft_len = sim.BENDING_HEAD_SHAFT_LENGTH_M
     bx, by = sim.BENDING_HEAD_XY
@@ -136,23 +126,31 @@ def write_rviz_urdf(path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Joint-State-Publisher (ersetzt die Gazebo-Gelenkregler)
+# Joint-State-Publisher (synchrone Gelenkfahrt)
 # ---------------------------------------------------------------------------
 
 class _JointCommand:
-    """Verhält sich wie ein gz-transport-Publisher: publish(msg) setzt den Sollwinkel."""
+    """Sollwert-Eingang für ein Gelenk: publish(msg) setzt den Sollwinkel (msg.data, rad).
+    `loop` gibt fr20_scene.send_joint_pose() Zugriff auf set_targets() (alle Gelenke einer
+    Pose atomar setzen) und wait_until_reached()."""
 
-    def __init__(self, state: "_JointStateLoop", joint: str) -> None:
-        self._state = state
+    def __init__(self, loop: "_JointStateLoop", joint: str) -> None:
+        self.loop = loop
         self._joint = joint
 
     def publish(self, msg) -> None:
-        self._state.set_target(self._joint, float(msg.data))
+        self.loop.set_targets({self._joint: float(msg.data)})
 
 
 class _JointStateLoop:
-    """rclpy-Node in eigenem Thread: fährt Ist- auf Sollwinkel (geschwindigkeitsbegrenzt)
-    und veröffentlicht /joint_states."""
+    """rclpy-Node in eigenem Thread: fährt Ist- auf Sollwinkel und veröffentlicht
+    /joint_states.
+
+    Die sechs Armgelenke fahren SYNCHRON: bei einem neuen Ziel startet ein Segment vom
+    aktuellen Ist-Wert aus, dessen Dauer das langsamste Gelenk bestimmt (|Weg| /
+    Maximalgeschwindigkeit); alle Gelenke kommen gleichzeitig an. Damit ist die gefahrene Bahn
+    exakt die lineare Gelenkraum-Interpolation, die fr20_collision auf Kollisionen prüft. Die
+    Biegekopf-Achse ist eine eigene Gruppe und fährt unabhängig vom Arm."""
 
     def __init__(self, start_pose: dict[str, float]) -> None:
         import rclpy
@@ -161,10 +159,14 @@ class _JointStateLoop:
         self._rclpy = rclpy
         self._JointState = JointState
         self._lock = threading.Lock()
+        self._reached = threading.Condition(self._lock)
         self._current = dict(start_pose)
         self._target = dict(start_pose)
         self._velocity = dict(sim.JOINT_VELOCITY_LIMIT_RAD_S)
         self._velocity[BENDING_JOINT] = sim.BENDING_HEAD_VELOCITY_RAD_S
+        self._groups = [list(sim.JOINT_NAMES), [BENDING_JOINT]]
+        # Pro Gruppe: (Startwerte, Zielwerte, Startzeit, Dauer) des laufenden Segments.
+        self._segments: list[tuple[dict, dict, float, float] | None] = [None for _ in self._groups]
         self._stop = threading.Event()
 
         if not rclpy.ok():
@@ -177,18 +179,49 @@ class _JointStateLoop:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def set_target(self, joint: str, angle: float) -> None:
+    def set_targets(self, targets: dict[str, float]) -> None:
+        """Setzt neue Sollwinkel (rad) und startet für jede betroffene Gruppe ein neues,
+        synchrones Segment ab der aktuellen Ist-Position."""
+        now = time.monotonic()
         with self._lock:
-            self._target[joint] = angle
+            self._target.update(targets)
+            for gi, group in enumerate(self._groups):
+                if not any(j in targets for j in group):
+                    continue
+                start = {j: self._current[j] for j in group}
+                goal = {j: self._target[j] for j in group}
+                duration = max(abs(goal[j] - start[j]) / self._velocity.get(j, 1.0) for j in group)
+                self._segments[gi] = (start, goal, now, duration)
+
+    def is_reached(self) -> bool:
+        with self._lock:
+            return all(seg is None for seg in self._segments)
+
+    def wait_until_reached(self, timeout_s: float = 30.0) -> bool:
+        """Blockiert, bis alle Gelenke ihr Ziel erreicht haben. False bei Zeitüberschreitung."""
+        with self._reached:
+            return self._reached.wait_for(lambda: all(seg is None for seg in self._segments), timeout_s)
+
+    def current(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._current)
 
     def _run(self) -> None:
         dt = 1.0 / PUBLISH_RATE_HZ
         while not self._stop.is_set():
+            now = time.monotonic()
             with self._lock:
-                for joint, target in self._target.items():
-                    step = self._velocity.get(joint, 1.0) * dt
-                    diff = target - self._current[joint]
-                    self._current[joint] += max(-step, min(step, diff))
+                for gi, seg in enumerate(self._segments):
+                    if seg is None:
+                        continue
+                    start, goal, t0, duration = seg
+                    frac = 1.0 if duration <= 1e-9 else min(1.0, (now - t0) / duration)
+                    for j in start:
+                        self._current[j] = start[j] + (goal[j] - start[j]) * frac
+                    if frac >= 1.0:
+                        self._segments[gi] = None
+                if all(seg is None for seg in self._segments):
+                    self._reached.notify_all()
                 names = list(self._current)
                 positions = [self._current[j] for j in names]
             msg = self._JointState()
@@ -212,7 +245,7 @@ class _JointStateLoop:
 class RvizProcess:
     """Bündelt robot_state_publisher, rviz2 und den Joint-State-Thread - mit derselben
     Schnittstelle wie subprocess.Popen (poll/terminate/wait/kill), damit
-    sim.shutdown_simulation() und `gz_proc.wait()` unverändert funktionieren."""
+    sim.shutdown_simulation() und `proc.wait()` wie bei einem einzelnen Prozess funktionieren."""
 
     def __init__(self, procs: list[subprocess.Popen], loop: _JointStateLoop, main_proc: subprocess.Popen) -> None:
         self._procs = procs
@@ -250,7 +283,8 @@ def _ros_env() -> dict:
 
 
 def launch(headless: bool = False) -> tuple[RvizProcess, dict]:
-    """Gegenstück zu sim.launch_simulation() für RViz2."""
+    """Startet robot_state_publisher, den Joint-State-Thread und (ohne `headless`) rviz2.
+    Gibt (proc, publishers) zurück, siehe sim.launch_simulation()."""
     for tool in ("ros2", "rviz2"):
         sim.check_tool(tool)
     env = _ros_env()
