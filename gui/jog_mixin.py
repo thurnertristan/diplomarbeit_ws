@@ -4,7 +4,8 @@ bending_mixin.py (eigener Antrieb, eigene Achse)."""
 
 import math
 
-import fr20_ceiling_gazebo as sim
+import fr20_collision as col
+import fr20_scene as sim
 import fr20_kinematics as kin
 import robot_program as rp
 
@@ -37,31 +38,32 @@ class JogMixin:
             print("Jog ignoriert: Simulation ist noch nicht bereit.")
             return False
 
-        Double = sim.import_gz("msgs", "double_pb2").Double
-
         if drot_deg:
             solution = dict(current)
             solution["j6"] = current["j6"] + math.radians(drot_deg)
-            msg = Double()
-            msg.data = solution["j6"]
-            self._publishers["j6"].publish(msg)
+            low, high = sim.JOINT_LIMITS_RAD["j6"]
+            if not low <= solution["j6"] <= high:
+                print("Jog verweigert: Werkzeugdrehung (j6) am Anschlag.")
+                return False
+            sim.send_joint_pose({"j6": solution["j6"]}, self._publishers)
             with self._pose_lock:
                 self._current_joints = solution
             return True
 
         pose = kin.forward_kinematics(current)
         x, y, z = pose[:3, 3]
-        target = rp.Point(name="Jog", xyz=(x + dx, y + dy, z + dz))
+        target = rp.Point(name="Jog", xyz=(float(x + dx), float(y + dy), float(z + dz)))
         try:
-            solution = rp.resolve_point(target, current, allow_fallback=False)
+            solution = rp.resolve_point(target, current, allow_fallback=False, offset_xyz=sim.load_table_offset())
         except (ValueError, RuntimeError) as exc:
             print(f"Jog fehlgeschlagen: {exc}")
             return False
+        clearance = col.path_clearance(current, solution, col.obstacles(sim.load_table_offset()))
+        if not clearance.ok:
+            print(f"Jog verweigert: zu nah an Tisch/Baugruppe ({clearance}).")
+            return False
 
-        for joint, angle in solution.items():
-            msg = Double()
-            msg.data = angle
-            self._publishers[joint].publish(msg)
+        sim.send_joint_pose(solution, self._publishers)
 
         with self._pose_lock:
             self._current_joints = solution

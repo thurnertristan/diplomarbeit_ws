@@ -30,22 +30,41 @@ FR20_KIOSK=0 ./start_gui.sh
 
 Die Fenster öffnen dann als normale, verschiebbare Fenster statt im Vollbild.
 
-### Simulation: Gazebo oder RViz2
+### Simulation: RViz2
 
-Standard ist Gazebo (Physik-Simulation). Alternativ RViz2 - nur 3D-Anzeige ohne
-Physik, dafür viel leichter (gut zum Prüfen von Bahnen, Posen und Erreichbarkeit):
+Die Simulation läuft in RViz2 (nur 3D-Anzeige, keine Physik). Gazebo wird nicht mehr
+verwendet.
 
 ```bash
-FR20_SIM=rviz ./start_gui.sh
-FR20_SIM=rviz FR20_KIOSK=0 ./start_gui.sh                         # am Entwickler-Bildschirm
-FR20_SIM=rviz python3 robot_program.py programs/beispiel_tisch.json
-python3 rviz_backend.py                                           # nur RViz2 + Beispielpose
+python3 robot_program.py programs/beispiel_tisch.json            # Programm in RViz abfahren
+python3 robot_program.py programs/beispiel_tisch.json --dry-run  # nur Kollisionsprüfung, ohne RViz
+python3 fr20_scene.py                                            # nur Szene + Beispielpose
 ```
 
 Umgesetzt in `rviz_backend.py` (URDF mit Tisch/Baugruppe/Biegekopf-Testachse,
 `robot_state_publisher`, eigener `/joint_states`-Publisher), RViz-Ansicht in
-`rviz/fr20.rviz`. Die ROS-Kommunikation bleibt auf diesem Rechner
-(`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`).
+`rviz/fr20.rviz`. Alle sechs Armgelenke fahren synchron (wie PTP/MoveJ am echten Roboter).
+Die ROS-Kommunikation bleibt auf diesem Rechner (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`).
+
+### Kollisionsschutz (Tisch/Baugruppe)
+
+RViz hat keine Physik. Damit der Arm nicht durch Tisch oder Baugruppe fährt, prüft
+`fr20_collision.py` jede Bahn vorher mit der echten Geometrie der Armglieder (STL-Meshes) gegen
+Tisch, Baugruppe, Biegekopf und Boden, mit mindestens 30 mm Abstand (`CLEARANCE_MARGIN_M`).
+
+- `robot_program.plan_motion()` sucht für jeden Punkt eine kollisionsfreie Bahn: direkt,
+  sonst senkrecht hoch (in 5-cm-Schritten, so hoch wie sicher möglich, höchstens
+  `SAFE_TRAVEL_Z`), oben verfahren und absenken, sonst zusätzlich über die Parkpose. IK-Lösungen mit dem Ellbogen zur Decke werden bevorzugt.
+- Vor dem Start wird das **ganze** Programm durchgeplant (bei Figur 1 ca. 10 s), danach
+  werden genau diese geprüften Bahnen gefahren. Ist ein Punkt nicht sicher
+  erreichbar, startet es gar nicht (GUI: Warnfenster „Kollisionsgefahr“).
+- Jog-Schritte in Richtung Tisch werden verweigert.
+- x/y/z in den Programmen meinen die **Mitte der Flanschfläche** (`tool0`). Die Oberkante der
+  Baugruppe liegt bei z = 0.795. Eine sichere Arbeitshöhe ist z ≥ 0.845 (`APPROACH_Z`).
+- Ein Werkzeug/Greifer ist noch nicht modelliert. Sobald es feststeht, in
+  `fr20_collision.py` und beim `tool0`-Versatz ergänzen.
+
+Die Software-Prüfung ersetzt keine sicherheitsbewertete Überwachung (siehe `SICHERHEIT.md`).
 
 ### Autostart beim Hochfahren
 
@@ -71,16 +90,13 @@ der Gruppe `dialout` sein, danach ab- und wieder anmelden:
 sudo usermod -aG dialout $USER
 ```
 
-## Fairino FR20-Simulation und GUI-Steuerung
+## Fairino FR20-Szene
 
-`fr20_ceiling_gazebo.py` startet eine Gazebo-Simulation mit einem
-kopfüber an der Decke montierten Fairino FR20, der über gz-transport-Topics
-pro Gelenk (j1..j6) angesteuert wird (siehe Docstring der Datei für
-Voraussetzungen). Das URDF stammt aus dem vendorten `fairino_description`-
-Paket (`fairino_description/urdf/fairino20_v6.urdf`, von
-https://github.com/FAIR-INNOVATION/frcobot_ros2), dem zur Laufzeit ein
-fixer Decken-Verankerungslink ("world") sowie ein "tool0"-Werkzeugframe
-angehängt werden.
+`fr20_scene.py` enthält die Zelle (Raum, kopfüber an der Decke montierter Fairino FR20,
+Tisch, Baugruppe, Biegekopf-Testachse) und startet die RViz2-Simulation. Das URDF stammt aus
+dem vendorten `fairino_description`-Paket (`fairino_description/urdf/fairino20_v6.urdf`, von
+https://github.com/FAIR-INNOVATION/frcobot_ros2). Zur Laufzeit kommen ein fixer
+Decken-Verankerungslink ("world") und ein "tool0"-Frame auf der Flanschfläche dazu.
 
 ## Punktprogramme abfahren
 
@@ -92,7 +108,7 @@ Grad); pro Punkt lässt sich mit `dwell_s` die Wartezeit einstellen, bevor
 der nächste Punkt angefahren wird.
 
 Nach dem letzten Punkt eines Programms fährt der Roboter automatisch noch
-den Nullpunkt (`fr20_ceiling_gazebo.CALIBRATION_REFERENCE_XYZ`, derselbe
+den Nullpunkt (`fr20_scene.CALIBRATION_REFERENCE_XYZ`, derselbe
 Punkt wie bei der Nullpunkt-Kalibrierung) an, bevor das Programm endet
 (`robot_program.run_program(..., home_at_end=True)`, Standard). Wird ein
 Programm durch ein anderes abgelöst (z.B. Klick auf einen anderen
@@ -122,7 +138,7 @@ gibt es die Nullpunkt-Kalibrierung:
    erreichbar, falls sich der Tisch nochmal verschiebt.
 2. "Nullpunkt kalibrieren" drücken - der Roboter fährt automatisch auf den
    markanten Referenzpunkt auf der Baugruppe (`CALIBRATION_REFERENCE_XYZ`
-   in `fr20_ceiling_gazebo.py` - dort auch änderbar, falls eine andere
+   in `fr20_scene.py` - dort auch änderbar, falls eine andere
    Stelle besser geeignet ist).
 3. Im Bestätigungsdialog per Jog (X/Y/Z) feinjustieren, falls die Baugruppe
    nicht exakt an der erwarteten Stelle steht, dann bestätigen.
@@ -145,11 +161,11 @@ Repo ist die Kommunikation von der Steuerlogik getrennt (austauschbares
 
 ```
 python3 bending_head_motor.py 45 --simulate            # nur loggen, ohne Hardware
-python3 bending_head_motor.py 45 --gazebo --headless   # simulierte Testachse in Gazebo drehen
+python3 bending_head_motor.py 45 --rviz                 # simulierte Testachse in RViz drehen
 python3 bending_head_motor.py 45 --port /dev/ttyUSB0   # echter Servo über Modbus-RTU
 ```
 
-Die `--gazebo`-Testachse (siehe `GazeboBendingBackend`) ist kein Nachbau
+Die `--rviz`-Testachse (siehe `RvizBendingBackend`) ist kein Nachbau
 des realen Biegekopfs, sondern ein einfacher Platzhalter (Ständer +
 drehbare Welle, wie zuvor die Rotationsachsen-Testachse) - sie dient nur
 dazu, Kinematik/Zeitablauf im Zusammenspiel mit dem FR20-Arm zu prüfen,

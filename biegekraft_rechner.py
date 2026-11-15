@@ -8,7 +8,7 @@ Biegeformeln für den Rohrquerschnitt, KEINE FEM-Simulation. Sie
 berücksichtigt weder Reibung (Rohr/Dorn/Matrize), noch Kaltverfestigung,
 noch Rückfederung - für eine erste Motor-/Getriebe-Dimensionierung mit
 Sicherheitsfaktor ist das üblich und ausreichend, für eine exakte
-Prozessauslegung nicht. Gazebo (Starrkörperphysik) kann diese Werte NICHT
+Prozessauslegung nicht. Eine Starrkörper-Simulation kann diese Werte NICHT
 liefern - eine Rohrverformung ist keine Starrkörper-Bewegung.
 
 Rechenweg:

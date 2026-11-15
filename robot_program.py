@@ -6,7 +6,7 @@ für Beispiele). Jeder Punkt ist entweder
 
   - eine kartesische Zielposition {"x", "y", "z"} (optional "rpy" für die
     Werkzeugorientierung, Grad, Standard: senkrecht nach unten wie
-    `fr20_ceiling_gazebo.LOOK_AT_TABLE_POSE`), die per inverser Kinematik
+    `fr20_scene.LOOK_AT_TABLE_POSE`), die per inverser Kinematik
     (`fr20_kinematics`) in Gelenkwinkel umgerechnet wird, oder
   - eine Gelenkpose {"joints": {"j1": ..., ..., "j6": ...}} in Grad, die
     direkt verwendet wird.
@@ -18,7 +18,13 @@ Start (Beispiel):
     python3 robot_program.py programs/beispiel_tisch.json
     python3 robot_program.py programs/beispiel_gelenkpose.json --loop
 
-Voraussetzungen: siehe Docstring von fr20_ceiling_gazebo.py.
+Koordinaten: x/y/z = Mitte der Flanschfläche (tool0) in Weltkoordinaten (m), Ursprung
+am Boden unter der Deckenhalterung. Jede Bahn wird vor dem Fahren gegen Tisch und Baugruppe
+geprüft (fr20_collision) - nicht kollisionsfrei fahrbare Programme starten gar nicht erst.
+Prüfen ohne Simulation:
+    python3 robot_program.py programs/beispiel_tisch.json --dry-run
+
+Voraussetzungen: siehe Docstring von fr20_scene.py.
 """
 
 from __future__ import annotations
@@ -33,7 +39,8 @@ from pathlib import Path
 
 import numpy as np
 
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
+import fr20_collision as col
 import fr20_kinematics as kin
 
 PROGRAMS_DIR = Path(__file__).resolve().parent / "programs"
@@ -172,119 +179,214 @@ def _rpy_deg_to_matrix(rpy_deg: tuple[float, float, float]) -> np.ndarray:
     return kin._rpy_to_matrix(r, p, y)
 
 
-# Alternative Startwerte (j1, j2, j3, j4) für den Fallback in resolve_point, falls die IK vom
-# aktuellen Punkt aus nicht konvergiert - decken übliche Ellbogen-Konfigurationen ab, damit
-# auch große Sprünge zwischen zwei Punkten eine Lösung finden statt an einem lokalen Minimum
-# hängenzubleiben.
-_FALLBACK_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5)
-_FALLBACK_ELBOWS = ((-1.5, -2.2, -1.2), (-1.5, 2.2, -1.2), (-0.5, -2.6, -1.5), (-0.5, 2.6, -1.5))
-
-_TABLE_CHECK_MARGIN_M = 0.05
-
-
-def _pose_hits_table(position: np.ndarray) -> bool:
-    """True, wenn der Punkt über der Tischfläche und unter der Tischplatte liegt."""
-    hx, hy = sim.TABLE_SIZE_XY[0] / 2, sim.TABLE_SIZE_XY[1] / 2
-    tx, ty = sim.TABLE_CENTER
-    x, y, z = position
-    return (
-        tx - hx - _TABLE_CHECK_MARGIN_M <= x <= tx + hx + _TABLE_CHECK_MARGIN_M
-        and ty - hy - _TABLE_CHECK_MARGIN_M <= y <= ty + hy + _TABLE_CHECK_MARGIN_M
-        and z < sim.TABLE_TOP_Z + _TABLE_CHECK_MARGIN_M
-    )
+# ---------------------------------------------------------------------------
+# Kollisionsfreie Bahnplanung
+# ---------------------------------------------------------------------------
+#
+# Jede Bewegung zwischen zwei Gelenkposen fährt in der Simulation (und als PTP/MoveJ am
+# echten Roboter) die lineare Gelenkraum-Bahn. plan_motion() liefert nur Wegpunkte, deren
+# Teilbahnen fr20_collision.is_path_safe() bestanden haben - findet sich keine sichere Bahn,
+# wird mit PlanningError abgebrochen, BEVOR sich der Roboter bewegt. (Früher wurde in diesem
+# Fall trotzdem die erste IK-Lösung gefahren - genau dann ging es durch den Tisch.)
 
 
-def _is_transition_safe(a: dict[str, float], b: dict[str, float], steps: int = 15) -> bool:
-    """Prüft per Sweep (lineare Gelenkraum-Interpolation a->b, wie sie die reale gz-sim
-    JointPositionController-Bewegung annähert), ob dabei ein Armglied den Tisch schneidet -
-    zwei für sich sichere Posen können über einen unsicheren Zwischenweg verbunden sein, wenn
-    sich die Ellbogen-Konfiguration dabei stark ändert (siehe resolve_point)."""
-    chain = kin.load_chain()
-    for frac in np.linspace(0, 1, steps):
-        inter = {j: a[j] * (1 - frac) + b[j] * frac for j in sim.JOINT_NAMES}
-        t = np.eye(4)
-        for joint in chain.chain:
-            t = t @ kin._origin_transform(joint.find("origin"))
-            if joint.get("type") != "fixed":
-                t = t @ kin._axis_rotation(joint.find("axis"), inter[joint.get("name")])
-            if _pose_hits_table(t[:3, 3]):
+class PlanningError(RuntimeError):
+    """Für einen Punkt gibt es keine kollisionsfreie Lösung bzw. Bahn."""
+
+
+# Startwerte (j1, j2, j3, j4) für die IK-Suche nach weiteren Lösungen. Bevorzugt werden
+# Konfigurationen mit Ellbogen zur Decke (am deckenmontierten Arm hängt der Ellbogen sonst
+# Richtung Tisch und der Unterarm taucht in die Baugruppe ein).
+_SEED_J1 = (-2.5, -1.25, 0.0, 1.25, 2.5, 0.87)
+_SEED_ELBOWS = ((-0.95, -2.3, -1.46), (-1.5, -2.2, -1.2), (-0.5, -2.6, -1.5), (-1.5, 2.2, -1.2), (-0.5, 2.6, -1.5))
+_SEED_MAX_ITERATIONS = 150
+_MAX_CANDIDATES = 8
+
+
+def _target_matrix(point: Point, xyz: tuple[float, float, float]) -> np.ndarray:
+    target = np.eye(4)
+    target[:3, :3] = _rpy_deg_to_matrix(point.rpy_deg) if point.rpy_deg is not None else _DEFAULT_TOOL_R
+    target[:3, 3] = xyz
+    return target
+
+
+def _joint_distance(a: dict[str, float], b: dict[str, float]) -> float:
+    return sum(abs(a[j] - b[j]) for j in sim.JOINT_NAMES)
+
+
+def _ik_candidates(
+    target: np.ndarray, seed: dict[str, float], boxes, search: bool = True
+) -> list[dict[str, float]]:
+    """IK-Lösungen für `target`, die selbst kollisionsfrei stehen, sortiert nach Nähe zu `seed`.
+    `search=False`: nur die Lösung ausgehend von `seed` (schnell, z.B. für Jog)."""
+    found: list[dict[str, float]] = []
+
+    def add(sol: dict[str, float] | None) -> None:
+        if sol is None or any(_joint_distance(sol, f) < 1e-3 for f in found):
+            return
+        if col.is_pose_safe(sol, boxes):
+            found.append(sol)
+
+    add(kin.inverse_kinematics(target, seed))
+    if search:
+        for j2, j3, j4 in _SEED_ELBOWS:
+            for j1 in _SEED_J1:
+                s = dict(seed, j1=j1, j2=j2, j3=j3, j4=j4)
+                add(kin.inverse_kinematics(target, s, max_iterations=_SEED_MAX_ITERATIONS))
+                if len(found) >= _MAX_CANDIDATES:
+                    break
+            if len(found) >= _MAX_CANDIDATES:
+                break
+    return sorted(found, key=lambda c: _joint_distance(c, seed))
+
+
+_LIFT_STEP_M = 0.05
+
+
+def _lift(joints: dict[str, float], boxes) -> list[dict[str, float]]:
+    """Senkrechter Rückzug: gleiche Werkzeugorientierung und x/y, Flansch in Schritten von
+    _LIFT_STEP_M Richtung SAFE_TRAVEL_Z angehoben. Kleine Schritte, weil eine lineare
+    Gelenkraum-Fahrt keine Gerade ist - in einem Zug würde der Flansch nah an der Baugruppe zu
+    Beginn kurz absinken.
+
+    Gibt die Zwischenposen (ohne `joints`) zurück, solange jeder Schritt kollisionsfrei ist.
+    Nah an der j1-Achse kann der Arm nicht beliebig hoch: um den Flansch dort anzuheben, muss
+    er sich falten und der Oberarm schwenkt Richtung Tisch - dann endet die Liste früher."""
+    pose = kin.forward_kinematics(joints)
+    z0 = pose[2, 3]
+    if z0 >= sim.SAFE_TRAVEL_Z - 1e-3:
+        return []
+    steps = int(np.ceil((sim.SAFE_TRAVEL_Z - z0) / _LIFT_STEP_M))
+    path, prev = [], joints
+    for z in np.linspace(z0, sim.SAFE_TRAVEL_Z, steps + 1)[1:]:
+        pose[2, 3] = z
+        nxt = kin.inverse_kinematics(pose, prev)
+        if nxt is None or not col.is_path_safe(prev, nxt, boxes):
+            break
+        path.append(nxt)
+        prev = nxt
+    return path
+
+
+def _lift_levels(path: list[dict[str, float]]) -> list[int]:
+    """Bis zu vier Rückzugshöhen (Anzahl Schritte), höchste zuerst; 0 = gar nicht anheben."""
+    n = len(path)
+    return sorted({n, (2 * n) // 3, n // 3, min(n, 2), 0}, reverse=True)
+
+
+def _park(j1: float) -> dict[str, float]:
+    """Sichere Parkpose (Arm zur Decke gefaltet, siehe sim.SAFE_STAGING_POSE) mit gegebenem j1."""
+    return dict(sim.SAFE_STAGING_POSE, j1=j1)
+
+
+def _plan_to_pose(
+    start: dict[str, float], goal: dict[str, float], boxes
+) -> list[dict[str, float]] | None:
+    """Kollisionsfreie Wegpunkte start -> goal oder None. Versucht nacheinander:
+      1. direkt,
+      2. senkrecht hoch auf SAFE_TRAVEL_Z, oben verfahren, senkrecht absenken,
+      3. über die Parkpose (Arm zur Decke gefaltet): hoch, j1 drehen, runter."""
+    if col.is_path_safe(start, goal, boxes):
+        return [goal]
+
+    def chain_ok(route: list[dict[str, float]]) -> bool:
+        prev = start
+        for w in route:
+            if not col.is_path_safe(prev, w, boxes):
                 return False
-    return True
+            prev = w
+        return True
+
+    lift_start, lift_goal = _lift(start, boxes), _lift(goal, boxes)
+    park = [_park(start["j1"]), _park(goal["j1"])]
+    tried: set[tuple[int, int, bool]] = set()
+    # 2. senkrecht hoch, auf dieser Höhe verfahren, senkrecht runter - höchste Höhen zuerst.
+    # 3. dasselbe, aber oben über die Parkpose (Arm zur Decke gefaltet, j1 drehen).
+    for via_park in (False, True):
+        for ks in _lift_levels(lift_start):
+            for kg in _lift_levels(lift_goal):
+                if (ks, kg, via_park) in tried or (ks == kg == 0 and not via_park):
+                    continue
+                tried.add((ks, kg, via_park))
+                up = lift_start[:ks]
+                down = list(reversed(lift_goal[:kg])) + [goal]
+                route = _dedupe(up + (park if via_park else []) + down)
+                if chain_ok(route):
+                    return route
+    return None
+
+
+def _dedupe(route: list[dict[str, float]]) -> list[dict[str, float]]:
+    """Entfernt direkt aufeinanderfolgende (fast) gleiche Posen."""
+    out: list[dict[str, float]] = []
+    for w in route:
+        if not out or _joint_distance(out[-1], w) > 1e-4:
+            out.append(w)
+    return out
 
 
 def resolve_point(
     point: Point,
     current_joints_rad: dict[str, float],
     allow_fallback: bool = True,
+    offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> dict[str, float]:
-    """Berechnet die Ziel-Gelenkwinkel (rad) für einen Punkt.
-
-    Für kartesische Punkte wird numerische IK mit der aktuellen Pose als Seed verwendet
-    (bleibt so meist nahe an der vorherigen Konfiguration). Bei einem zu großen Sprung kann
-    diese kontinuitätsbasierte Suche in einem lokalen Minimum hängenbleiben, obwohl der Punkt
-    erreichbar wäre - dann wird zusätzlich mit alternativen Ellbogen-Konfigurationen
-    (_FALLBACK_ELBOWS/_FALLBACK_J1) gesucht. Unter allen Kandidaten wird die bevorzugt, deren
-    Übergang von current_joints_rad aus nachweislich nicht durch den Tisch schwingt (siehe
-    _is_transition_safe), statt einfach die erste gefundene Lösung zu nehmen.
-    """
+    """Ziel-Gelenkwinkel (rad) für einen Punkt - nur Lösungen innerhalb der Gelenkgrenzen, die
+    selbst kollisionsfrei stehen, die nächstgelegene zu `current_joints_rad`. Prüft NICHT die
+    Bahn dorthin (dafür plan_motion). Wirft PlanningError, wenn es keine solche Lösung gibt."""
+    boxes = col.obstacles(offset_xyz)
     if point.joints_deg is not None:
-        return {j: math.radians(deg) for j, deg in point.joints_deg.items()}
-
+        goal = {j: math.radians(deg) for j, deg in point.joints_deg.items()}
+        c = col.pose_clearance(goal, boxes)
+        if not c.ok:
+            raise PlanningError(f"Gelenkpose '{point.name}' kollidiert ({c}).")
+        return goal
     if point.xyz is None:
         raise ValueError(f"Punkt '{point.name}' hat weder 'joints' noch 'xyz'.")
-
-    target = np.eye(4)
-    target[:3, :3] = (
-        _rpy_deg_to_matrix(point.rpy_deg) if point.rpy_deg is not None else _DEFAULT_TOOL_R
-    )
-    target[:3, 3] = point.xyz
-
-    candidates: list[dict[str, float]] = []
-    primary = kin.inverse_kinematics(target, current_joints_rad)
-    if primary is not None:
-        candidates.append(primary)
-
-    # Primärlösung gefunden UND nachweislich sicher: sofort zurückgeben, statt zusätzlich das
-    # teure Fallback-Raster durchzurechnen (primary ist durch die Seedwahl praktisch immer die
-    # kontinuitätsnächste Lösung).
-    if primary is not None and _is_transition_safe(current_joints_rad, primary):
-        return primary
-
-    # max_iterations niedriger als der Standard (500): die meisten der bis zu 20
-    # Raster-Kombinationen konvergieren ohnehin nicht, eine tatsächlich konvergierende Lösung
-    # braucht selten mehr als ~50 Iterationen.
-    _FALLBACK_MAX_ITERATIONS = 150
-    if allow_fallback:
-        for j1 in _FALLBACK_J1:
-            for j2, j3, j4 in _FALLBACK_ELBOWS:
-                seed = dict(current_joints_rad, j1=j1, j2=j2, j3=j3, j4=j4)
-                sol = kin.inverse_kinematics(target, seed, max_iterations=_FALLBACK_MAX_ITERATIONS)
-                if sol is not None:
-                    candidates.append(sol)
-                    if len(candidates) >= 8:  # genug Auswahl
-                        break
-            if len(candidates) >= 8:
-                break
-
+    xyz = tuple(p + o for p, o in zip(point.xyz, offset_xyz))
+    candidates = _ik_candidates(_target_matrix(point, xyz), current_joints_rad, boxes, search=allow_fallback)
     if not candidates:
-        raise RuntimeError(
-            f"Keine IK-Lösung für Punkt '{point.name}' ({point.xyz}) gefunden - "
-            f"Punkt evtl. außerhalb der Reichweite."
+        raise PlanningError(
+            f"Keine kollisionsfreie IK-Lösung für Punkt '{point.name}' {tuple(round(v, 3) for v in xyz)} - "
+            f"außerhalb der Reichweite oder zu nah an Tisch/Baugruppe "
+            f"(Flansch mind. {col.CLEARANCE_MARGIN_M * 1000:.0f} mm Abstand, Baugruppe-Oberkante z = {sim.ASSEMBLY_TOP_Z:.3f})."
         )
-
-    # Unter allen kollisionssicheren Kandidaten die mit der geringsten Gelenkbewegung zur
-    # aktuellen Pose wählen - sonst kann bei mehreren gültigen Ellbogen-Konfigurationen eine
-    # weit entfernte gewählt werden, obwohl eine näherliegende auch sicher wäre.
-    safe_candidates = [c for c in candidates if _is_transition_safe(current_joints_rad, c)]
-    if safe_candidates:
-        def joint_delta(c: dict[str, float]) -> float:
-            return sum(abs(c[j] - current_joints_rad[j]) for j in sim.JOINT_NAMES)
-
-        return min(safe_candidates, key=joint_delta)
-
-    # Keiner der Kandidaten ist nachweislich sicher - besser als nichts ist die erste
-    # (kontinuitätsnächste) Lösung, der Aufrufer sollte das per --dry-run zusätzlich prüfen.
     return candidates[0]
+
+
+def plan_motion(
+    point: Point,
+    current_joints_rad: dict[str, float],
+    offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> list[dict[str, float]]:
+    """Kollisionsfreie Wegpunkte (Gelenkposen, rad) von der aktuellen Pose zum Punkt.
+
+    `offset_xyz` (kalibrierter Tisch-Offset) wird auf kartesische Ziele addiert und verschiebt
+    auch Tisch/Baugruppe in der Kollisionsprüfung. Gelenkpose-Ziele bleiben unverändert.
+    Wirft PlanningError, wenn es keine sichere Bahn gibt."""
+    boxes = col.obstacles(offset_xyz)
+    start_c = col.pose_clearance(current_joints_rad, boxes)
+    if not start_c.ok:
+        raise PlanningError(f"Aktuelle Pose kollidiert bereits ({start_c}) - erst per Jog freifahren.")
+
+    if point.joints_deg is not None:
+        goals = [resolve_point(point, current_joints_rad, offset_xyz=offset_xyz)]
+    else:
+        if point.xyz is None:
+            raise ValueError(f"Punkt '{point.name}' hat weder 'joints' noch 'xyz'.")
+        xyz = tuple(p + o for p, o in zip(point.xyz, offset_xyz))
+        goals = _ik_candidates(_target_matrix(point, xyz), current_joints_rad, boxes)
+        if not goals:
+            resolve_point(point, current_joints_rad, offset_xyz=offset_xyz)  # wirft mit Erklärung
+
+    for goal in goals:
+        route = _plan_to_pose(current_joints_rad, goal, boxes)
+        if route is not None:
+            return route
+    raise PlanningError(
+        f"Keine kollisionsfreie Bahn zu Punkt '{point.name}' gefunden - Punkt anpassen "
+        f"oder Zwischenpunkt einfügen."
+    )
 
 
 HOME_POINT = Point(name="Nullpunkt", xyz=sim.CALIBRATION_REFERENCE_XYZ, dwell_s=0.0)
@@ -308,7 +410,7 @@ def calibrate_table_offset(current_joints_rad: dict[str, float]) -> tuple[float,
     sim.CALIBRATION_REFERENCE_XYZ gebracht haben. Der Offset ist die Differenz zwischen der
     per Vorwärtskinematik berechneten tatsächlichen Position und dieser Soll-Position, wird
     sofort gespeichert (sim.save_table_offset) und danach auf alle kartesischen
-    Programmpunkte angewendet (siehe _build_travel_waypoints).
+    Programmpunkte angewendet (siehe plan_motion).
 
     Die Tischhöhe (Z) ändert sich nicht - dz bleibt immer 0.
 
@@ -338,57 +440,6 @@ def _interruptible_sleep(
     deadline = time.time() + seconds
     while time.time() < deadline and not _interrupted(stop_event, abort_event):
         time.sleep(min(0.05, deadline - time.time()))
-
-
-def _build_travel_waypoints(
-    point: Point,
-    current_joints_rad: dict[str, float],
-    offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
-) -> list[dict[str, float]]:
-    """Baut die Gelenkziele, die für einen Punkt tatsächlich gesendet werden.
-
-    Bei kartesischen Zielen unterhalb von sim.SAFE_TRAVEL_Z wird zuerst auf diese Höhe
-    zurückgezogen, dann seitlich verfahren, erst dann abgesenkt - statt direkt quer zu fahren.
-    Grund: zwei für sich sichere Punkte können unterschiedliche Ellbogen-Konfigurationen
-    brauchen, reine Gelenkraum-Interpolation zwischen ihnen schwingt dann oft durch den Tisch.
-
-    Bei Gelenkpose-Zielen oder wenn kaum seitliche Bewegung nötig ist, wird direkt gefahren.
-
-    `offset_xyz` wird - falls ungleich Null - einmal auf den Zielpunkt addiert, bevor
-    irgendetwas anderes berechnet wird, damit auch Zwischenschritte an der korrigierten
-    Position landen. Gelenkpose-Ziele sind davon unberührt.
-    """
-    if point.xyz is None:
-        return [resolve_point(point, current_joints_rad)]
-
-    if offset_xyz != (0.0, 0.0, 0.0):
-        point = replace(point, xyz=tuple(p + o for p, o in zip(point.xyz, offset_xyz)))
-
-    x, y, z = point.xyz
-    if z >= sim.SAFE_TRAVEL_Z - 1e-6:
-        return [resolve_point(point, current_joints_rad)]
-
-    current_xyz = kin.forward_kinematics(current_joints_rad)[:3, 3]
-    lateral_dist = math.hypot(current_xyz[0] - x, current_xyz[1] - y)
-    if lateral_dist < 0.05:
-        return [resolve_point(point, current_joints_rad)]
-
-    # resolve_point wählt selbst die per _is_transition_safe nachweislich tischsichere Lösung -
-    # der Rückzug auf SAFE_TRAVEL_Z zerlegt eine große Bewegung zusätzlich in drei kleinere,
-    # leichter sicher lösbare Teilschritte (Rückzug hoch, seitlich verfahren, absenken).
-    try:
-        retract = resolve_point(
-            Point(name=f"{point.name} (Rückzug)", xyz=(current_xyz[0], current_xyz[1], sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
-            current_joints_rad,
-        )
-        travel = resolve_point(
-            Point(name=f"{point.name} (Verfahren)", xyz=(x, y, sim.SAFE_TRAVEL_Z), rpy_deg=point.rpy_deg),
-            retract,
-        )
-        final = resolve_point(point, travel)
-    except RuntimeError:
-        return [resolve_point(point, current_joints_rad)]
-    return [retract, travel, final]
 
 
 def _interrupted(stop_event: "threading.Event | None", abort_event: "threading.Event | None" = None) -> bool:
@@ -459,7 +510,7 @@ def run_program(
 ) -> dict[str, float]:
     """Fährt alle Punkte eines Programms nacheinander an.
 
-    `publishers`: gz-transport-Publisher pro Gelenk.
+    `publishers`: Sollwert-Eingänge pro Gelenk (sim.launch_simulation()).
     `stop_event`: harter, sofortiger Abbruch ohne Nullpunkt-Rückfahrt - so können sich zwei
     Programme am selben Roboter sauber ablösen.
     `pause_event`: hält vor jedem Zwischenschritt an, kein Abbruch.
@@ -476,20 +527,51 @@ def run_program(
     `abort_event` (sanfter Abbruch): überspringt restliche Punkte, fährt aber noch den
     Nullpunkt an. Ein zusätzlicher harter stop_event-Abbruch währenddessen überstimmt sofort.
 
+    Vor der ersten Bewegung wird das GANZE Programm auf kollisionsfreie Bahnen geprüft
+    (check_program) - ist ein Punkt nicht sicher erreichbar, wirft run_program PlanningError,
+    ohne den Roboter zu bewegen. Jede einzelne Fahrt wird zusätzlich unmittelbar vorher ab der
+    tatsächlichen Pose neu geplant (plan_motion), z.B. nach einem Jog während einer Pause.
+
     Gibt die zuletzt gesendete Gelenkpose zurück.
     """
-    Double = sim.import_gz("msgs", "double_pb2").Double
     if current is None:
         current = dict(sim.SAFE_STAGING_POSE)
     offset_xyz = sim.load_table_offset()
     if offset_xyz != (0.0, 0.0, 0.0):
         print(f"Tisch-Offset aktiv: dx={offset_xyz[0]:+.4f} dy={offset_xyz[1]:+.4f} dz={offset_xyz[2]:+.4f} m")
 
+    start = get_current() if get_current is not None else current
+    plans: dict = {}
+    print(f"Prüfe '{program.name}' auf kollisionsfreie Bahnen ...")
+    problems = check_program(program, start, offset_xyz, home_at_end=home_at_end, plans=plans)
+    if problems:
+        raise PlanningError(
+            f"Programm '{program.name}' wird nicht gestartet - nicht kollisionsfrei fahrbar:\n  "
+            + "\n  ".join(problems)
+        )
+
+    loop_handle = getattr(next(iter(publishers.values())), "loop", None)
+
     def send(joint_angles: dict[str, float]) -> None:
-        for joint, angle in joint_angles.items():
-            msg = Double()
-            msg.data = angle
-            publishers[joint].publish(msg)
+        sim.send_joint_pose(joint_angles, publishers)
+
+    def wait_motion(target: dict[str, float], start_pose: dict[str, float], abort) -> dict[str, float] | None:
+        """Wartet, bis die Fahrt zu `target` beendet ist. Bei hartem Stopp wird der Arm sofort
+        an der aktuellen Stelle angehalten (liegt auf der geprüften Bahn) und None
+        zurückgegeben. Ein sanfter Abbruch lässt die laufende (geprüfte) Teilfahrt zu Ende
+        fahren."""
+        if loop_handle is None:
+            _interruptible_sleep(_min_settle_time(start_pose, target), stop_event)
+            return None if stopped() else target
+        while not loop_handle.is_reached():
+            if stopped():
+                halted = {j: v for j, v in loop_handle.current().items() if j in sim.JOINT_NAMES}
+                loop_handle.set_targets(halted)
+                if on_target_sent is not None:
+                    on_target_sent(halted)
+                return None
+            time.sleep(0.03)
+        return target
 
     def stopped() -> bool:
         return stop_event is not None and stop_event.is_set()
@@ -510,7 +592,13 @@ def run_program(
         if get_current is not None:
             current = get_current()
         print(f"-> Punkt '{point.name}'")
-        waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
+        planned = plans.get(id(point))
+        if planned is not None and _joint_distance(planned[0], current) < 1e-6:
+            waypoints = planned[1]  # vorab geprüfte Bahn, Start stimmt überein
+        else:
+            waypoints = plan_motion(point, current, offset_xyz=offset_xyz)  # z.B. nach Jog
+        if len(waypoints) > 1:
+            print(f"   (kollisionsfreie Umfahrung über {len(waypoints) - 1} Zwischenpose(n))")
         for i, target in enumerate(waypoints):
             _wait_while(pause_event, stop_event, abort_event)
             if stopped():
@@ -518,14 +606,15 @@ def run_program(
                 return None
             if abort_event is not None and abort_event.is_set():
                 return current
-            settle_s = _min_settle_time(current, target)
             send(target)
-            current = target
             if on_target_sent is not None:
-                on_target_sent(current)
-            is_last = i == len(waypoints) - 1
-            base_wait = point.dwell_s if is_last else 0.8
-            _interruptible_sleep(max(base_wait, settle_s), stop_event, abort_event)
+                on_target_sent(target)
+            if wait_motion(target, current, abort_event) is None:
+                print("Programm abgebrochen.")
+                return None
+            current = target
+            if i == len(waypoints) - 1:
+                _interruptible_sleep(point.dwell_s, stop_event, abort_event)
         return current
 
     while True:  # nur relevant bei loop=True
@@ -566,47 +655,56 @@ def run_program(
     return current
 
 
+def check_program(
+    program: Program,
+    start: dict[str, float],
+    offset_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    home_at_end: bool = True,
+    verbose: bool = False,
+    plans: "dict | None" = None,
+) -> list[str]:
+    """Plant das ganze Programm (inkl. Nullpunkt-Rückfahrt) ab `start` durch, ohne etwas zu
+    bewegen. Gibt eine Liste von Fehlermeldungen zurück - leer = alles kollisionsfrei.
+
+    `plans` (optional): wird mit {Punktname: (Startpose, Wegpunkte)} gefüllt, damit
+    run_program die geprüften Bahnen direkt fahren kann, statt sie neu zu planen."""
+    problems = []
+    current = dict(start)
+    points = list(program.points) + ([HOME_POINT] if home_at_end and program.points else [])
+    for point in points:
+        try:
+            waypoints = plan_motion(point, current, offset_xyz=offset_xyz)
+        except (ValueError, PlanningError) as exc:
+            problems.append(f"'{point.name}': {exc}")
+            continue
+        if plans is not None:
+            plans.setdefault(id(point), (dict(current), waypoints))
+        if verbose:
+            prev = current
+            for i, solution in enumerate(waypoints):
+                suffix = "" if i == len(waypoints) - 1 else f" (Zwischenpose {i + 1})"
+                clearance = col.path_clearance(prev, solution, col.obstacles(offset_xyz))
+                degrees = {j: round(math.degrees(a), 1) for j, a in solution.items()}
+                print(f"  '{point.name}'{suffix}: {degrees}   min. Abstand {clearance}")
+                prev = solution
+        current = waypoints[-1]
+    return problems
+
+
 def dry_run_program(program: Program) -> bool:
-    """Löst alle Punkte eines Programms auf und gibt die Gelenkwinkel aus, OHNE Gazebo/ROS 2
-    zu starten - nützlich, um neue/geänderte Punkte schnell zu prüfen (IK-Lösbarkeit, Sprünge
-    zwischen Punkten). Baut nur das URDF, nutzt SAFE_STAGING_POSE als Start-Seed.
-
-    Gibt True zurück, wenn alle Punkte aufgelöst werden konnten.
-    """
-    sim.WORK_DIR.mkdir(exist_ok=True)
-    urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-    sim.write_mount_urdf(urdf_path)
-
+    """Plant alle Punkte eines Programms inkl. Kollisionsprüfung durch und gibt Gelenkwinkel
+    und kleinsten Abstand zu Tisch/Baugruppe aus, OHNE RViz zu starten. Start ist
+    SAFE_STAGING_POSE. Gibt True zurück, wenn alles kollisionsfrei fahrbar ist."""
     offset_xyz = sim.load_table_offset()
-    print(f"[Dry-Run] Löse '{program.name}' auf, ausgehend von SAFE_STAGING_POSE (keine Simulation):")
+    print(f"[Dry-Run] Plane '{program.name}' ab SAFE_STAGING_POSE (keine Simulation):")
     if offset_xyz != (0.0, 0.0, 0.0):
         print(f"  Tisch-Offset aktiv: dx={offset_xyz[0]:+.4f} dy={offset_xyz[1]:+.4f} dz={offset_xyz[2]:+.4f} m")
     print()
-    current = dict(sim.SAFE_STAGING_POSE)
-    all_ok = True
-    for point in program.points:
-        try:
-            waypoints = _build_travel_waypoints(point, current, offset_xyz=offset_xyz)
-        except (ValueError, RuntimeError) as exc:
-            print(f"  FEHLER bei '{point.name}': {exc}")
-            all_ok = False
-            continue
-        n = len(waypoints)
-        for i, solution in enumerate(waypoints):
-            if n == 1:
-                suffix = ""
-            elif i == 0:
-                suffix = " (Rückzug)"
-            elif i == n - 1:
-                suffix = " (Ziel)"
-            else:
-                suffix = f" (Verfahren {i}/{n - 2})"
-            degrees = {j: round(math.degrees(a), 2) for j, a in solution.items()}
-            print(f"  '{point.name}'{suffix}: {degrees}")
-            current = solution
-
-    print("\nAlle Punkte gültig." if all_ok else "\nMindestens ein Punkt konnte nicht aufgelöst werden.")
-    return all_ok
+    problems = check_program(program, dict(sim.SAFE_STAGING_POSE), offset_xyz, verbose=True)
+    for problem in problems:
+        print(f"  FEHLER {problem}")
+    print("\nAlle Punkte kollisionsfrei fahrbar." if not problems else "\nProgramm ist NICHT kollisionsfrei fahrbar.")
+    return not problems
 
 
 # ---------------------------------------------------------------------------
@@ -621,11 +719,11 @@ def main() -> None:
         help="Pfad zu einer Programmdatei (JSON). Ohne Angabe: verfügbare Programme auflisten.",
     )
     parser.add_argument("--loop", action="store_true", help="Programm nach Ende erneut abfahren")
-    parser.add_argument("--headless", action="store_true", help="gz-sim ohne GUI starten")
+    parser.add_argument("--headless", action="store_true", help="ohne RViz-Fenster starten")
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Nur die Punkte auflösen und die Gelenkwinkel ausgeben, ohne Gazebo/ROS 2 zu starten.",
+        help="Nur Bahnen planen und auf Kollisionen prüfen, ohne RViz zu starten.",
     )
     args = parser.parse_args()
 
@@ -646,8 +744,8 @@ def main() -> None:
         ok = dry_run_program(program)
         raise SystemExit(0 if ok else 1)
 
-    print("Starte RViz2 ..." if sim.SIM_BACKEND == "rviz" else "Starte Gazebo Jetty (gz-sim) ...")
-    gz_proc, publishers = sim.launch_simulation(headless=args.headless)
+    print("Starte RViz2 ...")
+    sim_proc, publishers = sim.launch_simulation(headless=args.headless)
 
     try:
         print("Fahre zunächst in die sichere Zwischenpose (Kollisionsvermeidung) ...")
@@ -656,11 +754,13 @@ def main() -> None:
         run_program(program, publishers, loop=args.loop)
 
         print("\nProgramm fertig. Strg+C hier drücken, um zu beenden.")
-        gz_proc.wait()
+        sim_proc.wait()
+    except PlanningError as exc:
+        print(f"\n{exc}")
     except KeyboardInterrupt:
         print("\nBeende Simulation ...")
     finally:
-        sim.shutdown_simulation(gz_proc)
+        sim.shutdown_simulation(sim_proc)
 
 
 if __name__ == "__main__":

@@ -57,8 +57,8 @@ der Einzelkomponenten.
    aufzubewahren - Basis für alles Folgende.
 2. **Not-Halt** (Kategorie 0 oder 1 nach EN 60204-1), hardwareseitig, gut
    erreichbar an Bedienstand und Gefahrenbereich - aktuell im Code
-   (`fr20_ceiling_gazebo.py`, `robot_program.py`, `gui/my_gui.py`) nicht
-   vorhanden, da bisher reine Gazebo-Simulation. Muss vor Realbetrieb
+   (`fr20_scene.py`, `robot_program.py`, `gui/my_gui.py`) nicht
+   vorhanden, da bisher reine RViz-Simulation. Muss vor Realbetrieb
    nachgerüstet werden.
 3. **Handbetrieb/Jog abgesichert**: Die Jog-Buttons in `gui/my_gui.py`
    entsprechen funktional einem Teach-Modus - dafür braucht es einen
@@ -73,7 +73,7 @@ der Einzelkomponenten.
    EN ISO 13849-1), gekoppelt an die Robotersteuerung (siehe Abschnitt
    unten).
 6. **Sicherheitsbezogene Steuerung PL d/Kat. 3**: Die Software-Grenzen im
-   aktuellen Code (Tischkollisionsprüfung `_is_transition_safe`,
+   aktuellen Code (Kollisionsprüfung `fr20_collision.py`,
    Gelenkgrenzen in `fr20_kinematics.inverse_kinematics`) zählen **nicht**
    als normkonforme Schutzmaßnahme - dafür braucht's sicherheitsbewertete
    E/A (z. B. safety-rated I/O des FR20-Controllers) für Not-Halt,
@@ -96,7 +96,7 @@ konzentrische **Warn-** und **Schutzfelder** um die Zelle überwacht:
 Warnfeld-Eintritt reduziert das Robotertempo, Schutzfeld-Eintritt löst
 einen sicherheitsgerichteten Halt (Kategorie 0/1 nach EN 60204-1) aus.
 
-### Konkrete Kandidaten für den 4×4 m Raum (`ROOM_SIZE_XY` in `fr20_ceiling_gazebo.py`)
+### Konkrete Kandidaten für den 4×4 m Raum (`ROOM_SIZE_XY` in `fr20_scene.py`)
 
 Die Raumdiagonale beträgt ca. 5,7 m - je nach Montageposition des Scanners
 (mittig an einer Wand vs. in einer Ecke) muss das Schutzfeld das

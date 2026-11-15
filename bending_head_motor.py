@@ -12,8 +12,8 @@ ein neues Backend (Schnittstelle: `connect`, `move_by`), der Rest
 Backends: `SimulatedBendingBackend` (Konsolen-Log, keine Hardware nötig),
 `ModbusRTUBendingBackend` (echte Kommunikation über Modbus-RTU/RS485 mit
 dem MCDLN35SG, 115200 Baud, 8N1, über einen USB-RS485-Konverter),
-`GazeboBendingBackend` (simulierte Testachse in Gazebo, siehe
-fr20_ceiling_gazebo.build_bending_head_model_sdf - rein für Kinematik-/
+`RvizBendingBackend` (simulierte Testachse in RViz, siehe
+rviz_backend.write_rviz_urdf - rein für Kinematik-/
 Zeitablauf-Tests BEVOR die Modbus-Register feststehen, kein Nachbau der
 realen Baugruppe).
 
@@ -303,35 +303,33 @@ class ModbusRTUBendingBackend:
         self._client.close()
 
 
-class GazeboBendingBackend:
-    """Backend für eine simulierte Test-Achse in Gazebo (siehe
-    fr20_ceiling_gazebo.build_bending_head_model_sdf) - NICHT der reale
+class RvizBendingBackend:
+    """Backend für eine simulierte Test-Achse in RViz (siehe
+    rviz_backend.write_rviz_urdf) - NICHT der reale
     Biegekopf, sondern ein einfacher Platzhalter, um Kinematik/Zeitablauf zu
     prüfen, solange die Modbus-Register des MCDLN35SG noch nicht final sind.
 
-    Der gz-sim JointPositionController hält ein ABSOLUTES Zielgelenk (rad) -
+    Die Simulation hält ein ABSOLUTES Zielgelenk (rad) -
     dieses Backend führt den absoluten Zielwinkel daher selbst mit
     (`_current_rad`). `delta`/Position werden hier in Grad interpretiert
     (die Testachse ist rotatorisch)."""
 
     def __init__(self, publishers: dict, start_position_deg: float = 0.0) -> None:
-        import fr20_ceiling_gazebo as sim
+        import fr20_scene as sim
 
+        self._sim = sim
         self._publishers = publishers
         self._current_rad = math.radians(start_position_deg)
-        self._Double = sim.import_gz("msgs", "double_pb2").Double
-        sim.send_joint_pose({"bending_head": self._current_rad}, self._publishers)
+        sim.send_joint_pose({sim.BENDING_HEAD_JOINT: self._current_rad}, self._publishers)
 
     def connect(self, torque_limit_nm: float) -> None:
-        # der Gazebo-JointPositionController kennt kein Drehmoment-Limit -
+        # die Simulation kennt kein Drehmoment-Limit -
         # rein informativ, damit dieselbe BendingBackend-Schnittstelle gilt.
-        print(f"[Gazebo] Testachse verbunden (Drehmoment-Limit {torque_limit_nm:.1f} Nm gilt hier nur real, nicht in der Simulation).")
+        print(f"[RViz] Testachse verbunden (Drehmoment-Limit {torque_limit_nm:.1f} Nm gilt hier nur real, nicht in der Simulation).")
 
     def move_by(self, delta: float) -> None:
         self._current_rad += math.radians(delta)
-        msg = self._Double()
-        msg.data = self._current_rad
-        self._publishers["bending_head"].publish(msg)
+        self._sim.send_joint_pose({self._sim.BENDING_HEAD_JOINT: self._current_rad}, self._publishers)
 
 
 class BendingHeadAxis:
@@ -381,7 +379,7 @@ def run_bending_test_sequence(
     BendingHeadAxis-Lock). `on_position_changed`: Hook pro Zwischenschritt.
     `settle_s`: Callable[[float], float], Wartezeit bis eine Bewegung
     abgeschlossen ist (für einen nicht-blockierenden Regler wie
-    GazeboBendingBackend; bei blockierenden Backends genügt `None`).
+    RvizBendingBackend; bei blockierenden Backends genügt `None`).
     `dwell_s` gilt nur nach dem letzten Zwischenschritt eines Eintrags.
 
     Das Ziel jedes Eintrags wird EINMAL als absolute Position berechnet
@@ -437,7 +435,7 @@ def run_bending_test_sequence(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("delta", type=float, help="Relative Sollbewegung (Grad in --gazebo, sonst Einheit noch offen, siehe TODOs)")
+    parser.add_argument("delta", type=float, help="Relative Sollbewegung (Grad in --rviz, sonst Einheit noch offen, siehe TODOs)")
     parser.add_argument(
         "--port", default="/dev/ttyUSB0", help="Serieller Port des USB-RS485-Konverters (Standard: /dev/ttyUSB0)"
     )
@@ -448,29 +446,28 @@ def main() -> None:
         help="Ohne echte Hardware testen - loggt nur, was gesendet würde (siehe SimulatedBendingBackend).",
     )
     mode.add_argument(
-        "--gazebo",
+        "--rviz",
         action="store_true",
-        help="Startet Gazebo mit einer simulierten Testachse (siehe GazeboBendingBackend) und fährt dort "
+        help="Startet RViz mit einer simulierten Testachse (siehe RvizBendingBackend) und fährt dort "
         "den Biegekopf-Platzhalter - zum Testen von Kinematik/Zeitablauf, bevor die Modbus-Register final sind.",
     )
-    parser.add_argument("--headless", action="store_true", help="Bei --gazebo: gz-sim ohne GUI starten")
     args = parser.parse_args()
 
-    if args.gazebo:
-        import fr20_ceiling_gazebo as sim
+    if args.rviz:
+        import fr20_scene as sim
 
-        print("Starte Gazebo mit der Biegekopf-Testachse ...")
-        gz_proc, publishers = sim.launch_simulation(headless=args.headless)
+        print("Starte RViz mit der Biegekopf-Testachse ...")
+        sim_proc, publishers = sim.launch_simulation()
         try:
-            axis = BendingHeadAxis(GazeboBendingBackend(publishers))
+            axis = BendingHeadAxis(RvizBendingBackend(publishers))
             new_position = axis.move_by(args.delta)
             print(f"Biegekopf-Testachse auf {new_position:+.2f}° gefahren.")
-            print("\nGazebo-Fenster schließen oder Strg+C hier drücken, um zu beenden.")
-            gz_proc.wait()
+            print("\nRViz-Fenster schließen oder Strg+C hier drücken, um zu beenden.")
+            sim_proc.wait()
         except KeyboardInterrupt:
-            print("\nBeende Gazebo ...")
+            print("\nBeende RViz ...")
         finally:
-            sim.shutdown_simulation(gz_proc)
+            sim.shutdown_simulation(sim_proc)
         return
 
     backend: BendingBackend

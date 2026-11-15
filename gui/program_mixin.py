@@ -1,4 +1,4 @@
-"""Punktprogramm-Ausführung: Gazebo-Start, Programm-Worker-Thread, Kalibrierung, die
+"""Punktprogramm-Ausführung: RViz-Start, Programm-Worker-Thread, Kalibrierung, die
 'Form Körper N'-Fenster und Pause/Weiter/Abbruch. Der Biegekopf-Testlauf hat sein eigenes
 Mixin (bending_mixin.py), da er unabhängig vom Arm-Programm läuft."""
 
@@ -7,7 +7,7 @@ import threading
 import traceback
 from tkinter import messagebox
 
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
 import robot_program as rp
 
 from constants import PROGRAM_ECKEN, PROGRAM_FIGUR1, PROGRAM_GELENKPOSE, PROGRAM_TISCH
@@ -15,26 +15,26 @@ from constants import PROGRAM_ECKEN, PROGRAM_FIGUR1, PROGRAM_GELENKPOSE, PROGRAM
 
 class ProgramMixin:
     def _ensure_simulation_running(self) -> dict:
-        """Startet Gazebo einmalig (auch schon beim GUI-Öffnen, siehe run()). Läuft bereits
+        """Startet die RViz-Simulation einmalig (auch schon beim GUI-Öffnen, siehe run()). Läuft bereits
         eine Simulation, wird sie wiederverwendet. _sim_lock schützt gegen gleichzeitigen
         Aufruf (Auto-Start + Button-Klick)."""
         with self._sim_lock:
-            if self._gz_proc is not None and self._gz_proc.poll() is None and self._publishers is not None:
+            if self._sim_proc is not None and self._sim_proc.poll() is None and self._publishers is not None:
                 return self._publishers
 
-            if self._gz_proc is not None and self._gz_proc.poll() is None:
-                # gz-sim läuft noch, aber Publisher-Aufbau ist beim letzten Versuch gescheitert -
+            if self._sim_proc is not None and self._sim_proc.poll() is None:
+                # Simulation läuft noch, aber Publisher-Aufbau ist beim letzten Versuch gescheitert -
                 # sauber beenden und neu aufsetzen statt mit kaputtem Rest weiterzumachen.
-                print("Vorheriger Gazebo-Start war unvollständig, versuche es erneut ...")
-                sim.shutdown_simulation(self._gz_proc)
-                self._gz_proc = None
+                print("Vorheriger RViz-Start war unvollständig, versuche es erneut ...")
+                sim.shutdown_simulation(self._sim_proc)
+                self._sim_proc = None
                 self._publishers = None
 
-            backend_name = "RViz2" if sim.SIM_BACKEND == "rviz" else "Gazebo"
+            backend_name = "RViz2"
             print(f"Starte {backend_name} (FR20) ...")
-            self._gz_proc, self._publishers = sim.launch_simulation()
+            self._sim_proc, self._publishers = sim.launch_simulation()
 
-            # Roboter spawnt in der physikalischen Null-Stellung - erst die kollisionsfreie
+            # Roboter startet in der Null-Stellung - erst die kollisionsfreie
             # Zwischenpose anfahren (Null -> Zielpunkt würde direkt durch den Tisch schwingen).
             sim.send_to_safe_staging_pose(self._publishers)
             with self._pose_lock:
@@ -129,6 +129,14 @@ class ProgramMixin:
                 )
                 if not stop_event.is_set():
                     print(f"Programm '{program.name}' beendet.")
+            except rp.PlanningError as exc:
+                # Programm wurde gar nicht erst gestartet (bzw. vor der nächsten Fahrt
+                # angehalten), weil die Bahn nicht kollisionsfrei ist - auf dem Touchscreen
+                # sichtbar melden, nicht nur in der Konsole.
+                print(f"Programm '{program_name}' nicht gefahren: {exc}")
+                self.mainwindow.after(
+                    0, lambda msg=str(exc): messagebox.showwarning("Kollisionsgefahr", msg)
+                )
             except Exception as exc:  # noqa: BLE001 - im Hintergrund-Thread sichtbar loggen
                 print(f"Fehler beim Ausführen von '{program_name}': {exc}")
                 traceback.print_exc()
@@ -308,8 +316,8 @@ class ProgramMixin:
         self._run_figure_program(PROGRAM_FIGUR1)
 
     def on_tischecken_pressed(self):
-        """Button 'Tisch-Ecken': fährt alle vier Tischecken 0,5m über der Tischplatte an und
-        dreht dort einmal den Werkzeugkopf (yaw 360°)."""
+        """Button 'Tisch-Ecken': fährt die vier Tischecken an (Flansch 15 cm über der
+        Tischplatte, siehe programs/beispiel_tisch_ecken.json)."""
         self._run_figure_program(PROGRAM_ECKEN)
 
     def on_naechster_punkt_pressed(self):

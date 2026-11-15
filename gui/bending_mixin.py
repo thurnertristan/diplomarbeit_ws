@@ -5,7 +5,7 @@ import math
 import threading
 import traceback
 
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
 import bending_head_motor as bhm
 
 from constants import JOG_REPEAT_MS
@@ -14,9 +14,9 @@ from constants import JOG_REPEAT_MS
 class BendingMixin:
     def on_biegekopf_pressed(self):
         """Button 'Biegekopf testen' (vierte Hauptfenster-Kachel): Achsen-Testlauf für die
-        Biegekopf-Testachse in Gazebo (180°, dann -360°), unabhängig vom FR20-Arm.
+        Biegekopf-Testachse in RViz (180°, dann -360°), unabhängig vom FR20-Arm.
 
-        Nutzt bewusst GazeboBendingBackend statt ModbusRTUBendingBackend: die echten
+        Nutzt bewusst RvizBendingBackend statt ModbusRTUBendingBackend: die echten
         Modbus-Register sind noch nicht final verdrahtet (siehe bending_head_motor.py) - ein
         Testen-Button darf nicht versehentlich den echten Servo ansteuern. Die simulierte
         Testachse ist kein Nachbau des realen Biegekopfs.
@@ -74,7 +74,7 @@ class BendingMixin:
         def worker() -> None:
             try:
                 publishers = self._ensure_simulation_running()
-                axis = bhm.BendingHeadAxis(bhm.GazeboBendingBackend(publishers))
+                axis = bhm.BendingHeadAxis(bhm.RvizBendingBackend(publishers))
                 self._bending_axis = axis
                 print("Biegekopf-Testlauf gestartet: 180°, dann -360°.")
                 bhm.run_bending_test_sequence(

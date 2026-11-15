@@ -1,6 +1,5 @@
 import collections
 import pathlib
-import subprocess
 import sys
 import threading
 import traceback
@@ -11,7 +10,7 @@ import tkinter as tk
 PROJECT_PATH = pathlib.Path(__file__).parent
 REPO_ROOT = PROJECT_PATH.parent
 
-# fr20_ceiling_gazebo/fr20_kinematics/robot_program/bending_head_motor liegen im
+# fr20_scene/fr20_kinematics/robot_program/bending_head_motor liegen im
 # Workspace-Root, nicht im gui/-Ordner - für Imports (hier und in den Mixin-Modulen,
 # siehe unten) bekannt machen, BEVOR diese importiert werden.
 sys.path.insert(0, str(REPO_ROOT))
@@ -26,7 +25,7 @@ from bending_mixin import BendingMixin
 from options_mixin import OptionsMixin
 from log_mixin import LogMixin, _StdoutTee
 
-import fr20_ceiling_gazebo as sim  # noqa: E402
+import fr20_scene as sim  # noqa: E402
 import bending_head_motor as bhm  # noqa: E402
 
 
@@ -84,12 +83,12 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
         self._make_responsive(self.mainwindow, self.builder.get_object("frame_main"))
         self._fit_window_to_screen(self.mainwindow)
 
-        # Zustand der Gazebo-Simulation/Programmausführung.
-        self._gz_proc: subprocess.Popen | None = None
+        # Zustand der RViz-Simulation/Programmausführung.
+        self._sim_proc = None  # rviz_backend.RvizProcess
         self._publishers: dict | None = None
         self._program_thread: threading.Thread | None = None
         self._stop_event: threading.Event | None = None
-        # Verhindert doppelten gz-sim-Start durch Auto-Start (run()) + gleichzeitigen Button-Klick.
+        # Verhindert doppelten Simulations-Start durch Auto-Start (run()) + gleichzeitigen Button-Klick.
         self._sim_lock = threading.Lock()
 
         # Eigener Thread für den Biegekopf-Testlauf (nicht self._program_thread) - der
@@ -130,7 +129,7 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
         self.on_close()
 
     def on_close(self):
-        # zentrale Aufräum-Routine: Jog stoppen, Programm abbrechen, Gazebo beenden, Fenster schließen
+        # zentrale Aufräum-Routine: Jog stoppen, Programm abbrechen, RViz beenden, Fenster schließen
         self._release_jog()
         self._release_bending_jog()
         self._stop_running_program()
@@ -139,8 +138,8 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
             if self._bending_stop_event is not None:
                 self._bending_stop_event.set()
             self._bending_thread.join(timeout=5.0)
-        if self._gz_proc is not None:
-            sim.shutdown_simulation(self._gz_proc)
+        if self._sim_proc is not None:
+            sim.shutdown_simulation(self._sim_proc)
         self.mainwindow.destroy()
 
     def run(self):
@@ -151,14 +150,14 @@ class MyApp(StyleMixin, JogMixin, ProgramMixin, BendingMixin, OptionsMixin, LogM
         self._open_calibration_window()
         self.window_kalibrierung.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        # Gazebo direkt mit der GUI starten (Hintergrund-Thread, damit das Fenster nicht
+        # RViz direkt mit der GUI starten (Hintergrund-Thread, damit das Fenster nicht
         # einfriert) statt erst beim ersten Button-Klick; Fehler deutlich loggen statt den
         # Thread lautlos sterben zu lassen.
         def _auto_start():
             try:
                 self._ensure_simulation_running()
             except Exception:
-                print("Automatischer Gazebo-Start beim Öffnen ist fehlgeschlagen:")
+                print("Automatischer RViz-Start beim Öffnen ist fehlgeschlagen:")
                 traceback.print_exc()
 
         threading.Thread(target=_auto_start, daemon=True).start()

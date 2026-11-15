@@ -1,9 +1,9 @@
 """Vorwärts-/inverse Kinematik für den deckenmontierten Fairino FR20.
 
 Baut die Kinematikkette nicht aus manuell abgetippten DH-Parametern auf,
-sondern liest sie direkt aus dem von fr20_ceiling_gazebo.py erzeugten
+sondern liest sie direkt aus dem von fr20_scene.py erzeugten
 URDF (world -> ... -> tool0). So stimmt die Kette garantiert mit dem
-Modell überein, das tatsächlich in Gazebo simuliert wird - inklusive der
+Modell überein, das in RViz angezeigt wird - inklusive der
 Deckenmontage-Transformation und des künstlich angehängten tool0-Frames,
 die ein von Hand erstelltes DH-Modell leicht übersieht.
 """
@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-import fr20_ceiling_gazebo as sim
+import fr20_scene as sim
 
 
 def _rpy_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
@@ -40,13 +40,19 @@ def _origin_transform(origin_elem: ET.Element | None) -> np.ndarray:
     return t
 
 
+_axis_cache: dict[int, tuple[float, float, float]] = {}
+
+
 def _axis_rotation(axis_elem: ET.Element | None, angle: float) -> np.ndarray:
     # Rotation eines beweglichen Gelenks um seine Achse mit gegebenem Winkel
-    axis = [1.0, 0.0, 0.0]
-    if axis_elem is not None:
-        axis = [float(v) for v in axis_elem.get("xyz", "1 0 0").split()]
-    axis = np.array(axis) / np.linalg.norm(axis)
-    x, y, z = axis
+    key = id(axis_elem)
+    if key not in _axis_cache:
+        axis = [1.0, 0.0, 0.0]
+        if axis_elem is not None:
+            axis = [float(v) for v in axis_elem.get("xyz", "1 0 0").split()]
+        axis = np.array(axis) / np.linalg.norm(axis)
+        _axis_cache[key] = tuple(float(v) for v in axis)
+    x, y, z = _axis_cache[key]
     c, s, one_c = np.cos(angle), np.sin(angle), 1 - np.cos(angle)
     r = np.array([
         [c + x * x * one_c, x * y * one_c - z * s, x * z * one_c + y * s],
@@ -77,6 +83,17 @@ class UrdfChain:
             raise ValueError(f"Kein Pfad von '{root_link}' zu '{tip_link}' im URDF gefunden.")
         self.chain = chain
         self.movable_joint_names = [j.get("name") for j in chain if j.get("type") != "fixed"]
+        # Vorab ausgewertet (statt pro FK-Aufruf XML-Strings zu parsen): pro Joint
+        # (Gelenkname oder None bei fix, Ursprungs-Transformation, Achse, Kind-Link).
+        self.steps: list[tuple[str | None, np.ndarray, ET.Element | None, str]] = [
+            (
+                None if j.get("type") == "fixed" else j.get("name"),
+                _origin_transform(j.find("origin")),
+                j.find("axis"),
+                j.find("child").get("link"),
+            )
+            for j in chain
+        ]
 
     @staticmethod
     def _find_chain(
@@ -94,14 +111,24 @@ class UrdfChain:
                 return [joint] + sub_chain
         return None  # Sackgasse
 
+    def link_frames(self, joint_angles: dict) -> dict[str, np.ndarray]:
+        """Weltpose (4x4) jedes Kind-Links entlang der Kette."""
+        frames = {}
+        t = np.eye(4)
+        for name, origin, axis, child in self.steps:
+            t = t @ origin
+            if name is not None:
+                t = t @ _axis_rotation(axis, joint_angles[name])
+            frames[child] = t
+        return frames
+
     def forward_kinematics(self, joint_angles: dict) -> np.ndarray:
         # multipliziert alle Kettenglieder durch, um die Werkzeugpose zu erhalten
         t = np.eye(4)
-        for joint in self.chain:
-            t = t @ _origin_transform(joint.find("origin"))
-            if joint.get("type") != "fixed":
-                angle = joint_angles[joint.get("name")]
-                t = t @ _axis_rotation(joint.find("axis"), angle)
+        for name, origin, axis, _child in self.steps:
+            t = t @ origin
+            if name is not None:
+                t = t @ _axis_rotation(axis, joint_angles[name])
         return t
 
 
@@ -111,14 +138,14 @@ _chain_cache: UrdfChain | None = None
 def load_chain() -> UrdfChain:
     """Lädt (und cached) die Gelenkkette aus dem generierten URDF - öffentlich,
     da robot_program.py sie ebenfalls direkt braucht. Cache spart wiederholtes
-    URDF-Parsen bei den vielen IK-Aufrufen pro Punkt (resolve_point). Existiert
-    das URDF noch nicht, wird es hier bei Bedarf einmalig erzeugt."""
+    URDF-Parsen bei den vielen IK-Aufrufen pro Punkt (resolve_point). Das URDF wird
+    beim ersten Aufruf pro Prozess neu erzeugt, damit Änderungen in fr20_scene (z.B.
+    FLANGE_OFFSET_M) nie an einer veralteten Datei vorbeilaufen."""
     global _chain_cache
     if _chain_cache is None:
         urdf_path = sim.WORK_DIR / f"{sim.MODEL_NAME}.urdf"
-        if not urdf_path.exists():
-            sim.WORK_DIR.mkdir(exist_ok=True)
-            sim.write_mount_urdf(urdf_path)
+        sim.WORK_DIR.mkdir(exist_ok=True)
+        sim.write_mount_urdf(urdf_path)
         _chain_cache = UrdfChain(urdf_path)
     return _chain_cache
 
@@ -146,10 +173,24 @@ def _pose_error(current: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.concatenate([pos_err, rot_err])
 
 
+def _wrap_into_limits(angles: np.ndarray, lower: np.ndarray, upper: np.ndarray) -> np.ndarray:
+    """Dreht Winkel außerhalb der Gelenkgrenzen um ±360° zurück, wenn sie dann passen (gleiche
+    Stellung, z.B. j6 = -254° -> +106°), sonst wird auf die Grenze begrenzt."""
+    two_pi = 2 * np.pi
+    wrapped = angles.copy()
+    for i, a in enumerate(angles):
+        for cand in (a, a - two_pi, a + two_pi):
+            if lower[i] <= cand <= upper[i]:
+                wrapped[i] = cand
+                break
+        else:
+            wrapped[i] = min(max(a, lower[i]), upper[i])
+    return wrapped
+
+
 def inverse_kinematics(
     target_pose: np.ndarray,
     seed: dict,
-    joint_limit_rad: float = np.pi,
     max_iterations: int = 500,
     tolerance: float = 1e-4,
     max_step_rad: float = 0.2,
@@ -163,7 +204,11 @@ def inverse_kinematics(
     """
     chain = load_chain()
     names = chain.movable_joint_names
-    angles = np.array([seed[j] for j in names], dtype=float)  # Startwerte
+    # Gelenkgrenzen laut URDF (z.B. j2/j4: -265°..+85°) - Lösungen außerhalb wären am echten
+    # Roboter nicht fahrbar.
+    lower = np.array([sim.JOINT_LIMITS_RAD[j][0] for j in names])
+    upper = np.array([sim.JOINT_LIMITS_RAD[j][1] for j in names])
+    angles = np.clip(np.array([seed[j] for j in names], dtype=float), lower, upper)  # Startwerte
     damping = 0.05
     delta = 1e-6  # kleine Störung für die numerische Ableitung
 
@@ -200,6 +245,6 @@ def inverse_kinematics(
         step_norm = np.max(np.abs(delta_angles))
         if step_norm > max_step_rad:
             delta_angles *= max_step_rad / step_norm
-        angles = np.clip(angles + delta_angles, -joint_limit_rad, joint_limit_rad)
+        angles = _wrap_into_limits(angles + delta_angles, lower, upper)
 
     return None  # keine Lösung gefunden
